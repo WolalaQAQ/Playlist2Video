@@ -1,0 +1,13 @@
+{
+  "name": "@playlist2video/video-template",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "dependencies": {
+    "@playlist2video/shared": "0.1.0",
+    "@remotion/media-utils": "latest",
+    "remotion": "latest"
+  }
+}
