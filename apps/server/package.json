@@ -15,7 +15,10 @@
     "fastify": "latest",
     "music-metadata": "latest",
     "sharp": "latest",
-    "zod": "latest"
+    "zod": "latest",
+    "@remotion/bundler": "latest",
+    "@remotion/renderer": "latest",
+    "execa": "latest"
   },
   "devDependencies": {
     "tsx": "latest"
