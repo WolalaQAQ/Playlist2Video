@@ -12,3 +12,4 @@ assets/
 *.log
 .DS_Store
 .worktrees/
+*.tsbuildinfo

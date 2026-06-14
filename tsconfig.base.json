@@ -1,7 +1,11 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "strict": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
@@ -15,8 +19,13 @@
     "jsx": "react-jsx",
     "baseUrl": ".",
     "paths": {
-      "@playlist2video/shared": ["packages/shared/src/index.ts"],
-      "@playlist2video/video-template": ["packages/video-template/src/index.ts"]
-    }
+      "@playlist2video/shared": [
+        "packages/shared/src/index.ts"
+      ],
+      "@playlist2video/video-template": [
+        "packages/video-template/src/index.ts"
+      ]
+    },
+    "ignoreDeprecations": "6.0"
   }
 }
