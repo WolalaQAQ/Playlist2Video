@@ -1,0 +1,19 @@
+{
+  "name": "@playlist2video/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5173",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run src"
+  },
+  "dependencies": {
+    "@playlist2video/shared": "0.1.0",
+    "@playlist2video/video-template": "0.1.0",
+    "@remotion/player": "latest",
+    "react": "latest",
+    "react-dom": "latest"
+  }
+}
