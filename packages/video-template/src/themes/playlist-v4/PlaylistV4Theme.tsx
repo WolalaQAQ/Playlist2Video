@@ -1,5 +1,5 @@
 import React from 'react';
-import {Img, interpolate, staticFile, useCurrentFrame, useVideoConfig} from 'remotion';
+import {Audio, Img, interpolate, Sequence, staticFile, useCurrentFrame, useVideoConfig} from 'remotion';
 import {buildTimeline, findTrackAtTime, getTotalDuration} from '@playlist2video/shared';
 import type {PlaylistVideoProps} from '../../PlaylistVideo';
 import {BeatEffects} from './BeatEffects';
@@ -20,18 +20,26 @@ export const PlaylistV4Theme: React.FC<PlaylistVideoProps> = ({project}) => {
   const localTime = currentTrack ? currentTime - currentTrack.startSeconds : 0;
   const progress = currentTrack ? localTime / currentTrack.durationSeconds : 0;
   const energy = interpolate(Math.sin(frame / 5), [-1, 1], [0.15, 1]);
+  const audioTracks = timeline.filter((track) => track.audioPreviewUrl);
 
   if (!currentTrack) return <div className="p2v-root p2v-empty">No tracks loaded</div>;
 
+  const coverSrc = currentTrack.coverPreviewUrl ?? (currentTrack.renderCoverPath ? staticFile(currentTrack.renderCoverPath) : null);
+
   return (
     <div className="p2v-root">
+      {audioTracks.map((track) => (
+        <Sequence key={track.id} from={Math.round(track.startSeconds * fps)} durationInFrames={Math.ceil(track.durationSeconds * fps)}>
+          <Audio src={track.audioPreviewUrl!} />
+        </Sequence>
+      ))}
       <div className="p2v-bg" />
       <BeatEffects energy={energy} config={project.theme} />
       <main className="p2v-layout">
         <section className="p2v-now">
           <div className="p2v-cover-wrap">
             <div className="p2v-cover-glow" style={{transform: `scale(${1 + energy * 0.06})`}} />
-            {currentTrack.renderCoverPath ? <Img className="p2v-cover" src={staticFile(currentTrack.renderCoverPath)} /> : <div className="p2v-cover" />}
+            {coverSrc ? <Img className="p2v-cover" src={coverSrc} /> : <div className="p2v-cover" />}
           </div>
           <div className="p2v-copy">
             <div className="p2v-kicker">NOW PLAYING · {String(index + 1).padStart(2, '0')} / {timeline.length}</div>

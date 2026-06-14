@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import type {FastifyInstance} from 'fastify';
 import {defaultThemeConfig, ExportConfigSchema} from '@playlist2video/shared';
@@ -7,11 +8,26 @@ import {data} from '../../lib/api-response';
 import {AppError} from '../../lib/errors';
 import {assertSafeLocalPath} from '../../lib/path-safety';
 import {scanFolder} from '../audio/scan-folder';
+import {hydrateProjectMediaUrls, resolveProjectMediaPath} from './project-media';
 import {ProjectStore} from './project-store';
 
 const scanRequestSchema = z.object({folderPath: z.string().min(1)});
 const reorderRequestSchema = z.object({trackIds: z.array(z.string().min(1))});
 const updateTrackSchema = z.object({trackId: z.string().min(1), title: z.string().min(1).max(200), artist: z.string().min(1).max(200)});
+const mediaParamsSchema = z.object({trackId: z.string().min(1), kind: z.enum(['audio', 'cover'])});
+
+const contentTypes: Record<string, string> = {
+  '.aac': 'audio/aac',
+  '.flac': 'audio/flac',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.m4a': 'audio/mp4',
+  '.mp3': 'audio/mpeg',
+  '.ogg': 'audio/ogg',
+  '.png': 'image/png',
+  '.wav': 'audio/wav',
+  '.webp': 'image/webp',
+};
 
 export async function registerProjectRoutes(app: FastifyInstance, config: ServerConfig): Promise<void> {
   const store = new ProjectStore(config.workspaceDir);
@@ -28,10 +44,20 @@ export async function registerProjectRoutes(app: FastifyInstance, config: Server
       theme: defaultThemeConfig,
       exportConfig: ExportConfigSchema.parse({}),
     });
-    return data({project, warnings: result.warnings});
+    return data({project: hydrateProjectMediaUrls(project), warnings: result.warnings});
   });
 
-  app.get('/api/v1/projects/current', async () => data(await store.load()));
+  app.get('/api/v1/projects/current', async () => data(hydrateProjectMediaUrls(await store.load())));
+
+  app.get('/api/v1/projects/current/media/:trackId/:kind', async (request, reply) => {
+    const params = mediaParamsSchema.parse(request.params);
+    const project = await store.load();
+    const mediaPath = resolveProjectMediaPath(project, params.trackId, params.kind);
+    if (!mediaPath) throw new AppError('media_not_found', 'Media file was not found in the current project', 404);
+    const contentType = contentTypes[path.extname(mediaPath).toLowerCase()] ?? 'application/octet-stream';
+    reply.header('Content-Type', contentType);
+    return reply.send(await fs.readFile(mediaPath));
+  });
 
   app.patch('/api/v1/projects/current/reorder', async (request) => {
     const body = reorderRequestSchema.parse(request.body);
@@ -40,13 +66,13 @@ export async function registerProjectRoutes(app: FastifyInstance, config: Server
     if (body.trackIds.length !== project.tracks.length || body.trackIds.some((id) => !byId.has(id))) {
       throw new AppError('invalid_track_order', 'Track order must contain every current track exactly once', 422);
     }
-    return data(await store.save({...project, tracks: body.trackIds.map((id, order) => ({...byId.get(id)!, order}))}));
+    return data(hydrateProjectMediaUrls(await store.save({...project, tracks: body.trackIds.map((id, order) => ({...byId.get(id)!, order}))})));
   });
 
   app.patch('/api/v1/projects/current/tracks', async (request) => {
     const body = updateTrackSchema.parse(request.body);
     const project = await store.load();
     const tracks = project.tracks.map((track) => track.id === body.trackId ? {...track, title: body.title, artist: body.artist} : track);
-    return data(await store.save({...project, tracks}));
+    return data(hydrateProjectMediaUrls(await store.save({...project, tracks})));
   });
 }

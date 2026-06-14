@@ -9,6 +9,12 @@ coverage/
 /output/
 /assets/
 /.tmp/
+/project.json
+/playlists/
+/apps/server/assets/
+/apps/server/output/
+/apps/server/.tmp/
+/apps/server/project.json
 *.log
 .DS_Store
 .worktrees/

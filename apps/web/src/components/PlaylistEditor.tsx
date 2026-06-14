@@ -14,7 +14,7 @@ export const PlaylistEditor: React.FC<{
         {tracks.map((track, index) => (
           <article className="track-row" key={track.id}>
             <span>{String(index + 1).padStart(2, '0')}</span>
-            {track.coverPath ? <img src={`file://${track.coverPath}`} alt="" /> : <div className="cover-placeholder" />}
+            {track.coverPreviewUrl ? <img src={track.coverPreviewUrl} alt="" /> : <div className="cover-placeholder" />}
             <div>
               <input value={track.title} onChange={(event) => onUpdateTrack({trackId: track.id, title: event.target.value, artist: track.artist})} />
               <input value={track.artist} onChange={(event) => onUpdateTrack({trackId: track.id, title: track.title, artist: event.target.value})} />

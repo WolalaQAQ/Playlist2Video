@@ -11,6 +11,8 @@ export const TrackSchema = z.object({
   durationSeconds: z.number().positive(),
   coverPath: z.string().nullable(),
   renderCoverPath: z.string().nullable().optional(),
+  audioPreviewUrl: z.string().nullable().optional(),
+  coverPreviewUrl: z.string().nullable().optional(),
   order: z.number().int().nonnegative(),
 });
 
