@@ -5,7 +5,7 @@
 - Added local Fastify API for scanning audio folders and storing project state.
 - Added Vite React Web UI for importing folders, reviewing playlists, previewing video, and triggering export.
 - Added shared TypeScript schemas, timeline helpers, and a single-theme registry.
-- Added Remotion `playlist-v4` theme with full playlist panel, current-track highlight, bottom waveform, and beat-reactive effects.
+- Added Remotion `playlist-v4` theme with full playlist panel, current-track highlight, bottom spectrum visualizer, and beat-reactive effects.
 - Added FFmpeg/Remotion export pipeline for 1080p MP4 output.
 
 ### Fixes
@@ -14,11 +14,13 @@
 - Added HTTP Range support for preview media so audio can resume after seeking in the preview player.
 - Replaced decorative fake waveform bars with waveform peaks extracted from the actual audio files during scan.
 - Animated the real waveform as a playback-synchronized sliding window with played/playhead highlighting and beat-reactive glow.
+- Replaced the bottom time-domain waveform/progress visualization with FFT-derived frequency spectrum bars so the preview behaves like a realtime EQ visualizer.
 
 ### Design Rationale
 - Used a TypeScript stack to keep UI, server, shared contracts, and Remotion rendering aligned.
 - Implemented a data-driven theme registry while shipping only one MVP theme.
 - Used lightweight audio energy effects first to avoid advanced beat-detection complexity.
+- Precomputed compact spectrum frames during local scanning so browser preview and Remotion export render the same frequency-band visualizer without relying on Web Audio APIs at render time.
 
 ### Notes & Caveats
 - The MVP is local-only.

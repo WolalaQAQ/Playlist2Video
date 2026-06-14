@@ -4,7 +4,7 @@ import {buildTimeline, findTrackAtTime, getTotalDuration} from '@playlist2video/
 import type {PlaylistVideoProps} from '../../PlaylistVideo';
 import {BeatEffects} from './BeatEffects';
 import {PlaylistPanel} from './PlaylistPanel';
-import {Waveform} from './Waveform';
+import {SpectrumVisualizer} from './Waveform';
 import './theme.css';
 
 const fmt = (seconds: number) => `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`;
@@ -53,7 +53,7 @@ export const PlaylistV4Theme: React.FC<PlaylistVideoProps> = ({project}) => {
         </section>
         <PlaylistPanel timeline={timeline} currentTrackId={currentTrack.id} totalDurationSeconds={totalDurationSeconds} />
       </main>
-      <Waveform peaks={currentTrack.waveformPeaks} progress={progress} energy={energy} />
+      <SpectrumVisualizer spectrumFrames={currentTrack.spectrumFrames} progress={progress} energy={energy} />
     </div>
   );
 };

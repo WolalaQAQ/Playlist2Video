@@ -9,7 +9,7 @@ export interface ThemeOption {
 }
 
 export const themeOptions: ThemeOption[] = [
-  {id: 'playlist-v4', name: 'Playlist V4', description: 'YouTube-style playlist layout with waveform and beat-reactive effects'},
+  {id: 'playlist-v4', name: 'Playlist V4', description: 'YouTube-style playlist layout with realtime spectrum and beat-reactive effects'},
 ];
 
 export const defaultThemeConfig: ThemeConfig = {

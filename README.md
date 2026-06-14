@@ -35,7 +35,7 @@ It includes:
 - Current track cover, title, artist, album, and progress.
 - Full playlist panel on the right.
 - Highlighting for the current track.
-- Full-width bottom waveform.
+- Full-width bottom realtime frequency spectrum.
 - Beat-reactive glow, flashes, pulse rings, particles, and cover shine.
 
 ## Verification

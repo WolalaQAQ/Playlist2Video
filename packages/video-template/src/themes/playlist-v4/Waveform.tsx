@@ -2,35 +2,131 @@ import React from 'react';
 
 const clamp = (value: number, min = 0, max = 1) => Math.max(min, Math.min(max, value));
 
-function samplePeak(peaks: number[], index: number): number {
-  if (peaks.length === 0) return 0;
-  const safeIndex = clamp(index, 0, peaks.length - 1);
+function sampleBand(frame: number[], index: number): number {
+  if (frame.length === 0) return 0;
+  if (frame.length === 1) return frame[0];
+
+  const safeIndex = clamp(index, 0, frame.length - 1);
   const left = Math.floor(safeIndex);
-  const right = Math.min(peaks.length - 1, left + 1);
+  const right = Math.min(frame.length - 1, left + 1);
   const mix = safeIndex - left;
-  return peaks[left] * (1 - mix) + peaks[right] * mix;
+  return frame[left] * (1 - mix) + frame[right] * mix;
 }
 
-export const Waveform: React.FC<{peaks?: number[]; progress: number; energy: number; bars?: number}> = ({peaks, progress, energy, bars = 96}) => {
-  const source = peaks?.length ? peaks : Array.from({length: bars}, () => 0);
-  const safeProgress = clamp(progress);
-  const playheadBar = Math.floor(bars / 2);
-  const playheadPeakIndex = safeProgress * Math.max(0, source.length - 1);
-  const visibleHalfSpan = Math.max(4, source.length * 0.18);
+function spectrumFrameAt(spectrumFrames: number[][], progress: number): number[] {
+  if (spectrumFrames.length === 0) return [];
+  if (spectrumFrames.length === 1) return spectrumFrames[0];
+
+  const frameIndex = clamp(progress) * (spectrumFrames.length - 1);
+  const left = Math.floor(frameIndex);
+  const right = Math.min(spectrumFrames.length - 1, left + 1);
+  const mix = frameIndex - left;
+
+  return spectrumFrames[left].map((value, bandIndex) => value * (1 - mix) + (spectrumFrames[right][bandIndex] ?? 0) * mix);
+}
+
+function fallbackSpectrumFrame(bands: number, progress: number, energy: number): number[] {
+  const safeEnergy = clamp(energy);
+  return Array.from({length: bands}, (_, index) => {
+    const lowBias = 1 - index / Math.max(1, bands - 1);
+    const pulse = 0.5 + 0.5 * Math.sin(progress * Math.PI * 18 - index * 0.52);
+    return clamp((0.18 + lowBias * 0.34 + pulse * 0.42) * (0.55 + safeEnergy * 0.7));
+  });
+}
+
+type Rgb = [number, number, number];
+
+const spectrumPalette: Array<{position: number; color: Rgb}> = [
+  {position: 0, color: [249, 115, 22]},
+  {position: 0.28, color: [250, 204, 21]},
+  {position: 0.58, color: [34, 211, 238]},
+  {position: 0.78, color: [56, 189, 248]},
+  {position: 1, color: [124, 58, 237]},
+];
+
+const toHex = (value: number) => Math.round(value).toString(16).padStart(2, '0');
+
+function rgbToHex(color: Rgb): string {
+  return `#${toHex(color[0])}${toHex(color[1])}${toHex(color[2])}`;
+}
+
+function rgbText(color: Rgb): string {
+  return color.map((value) => Math.round(value)).join(', ');
+}
+
+function mixRgb(from: Rgb, to: Rgb, amount: number): Rgb {
+  return [
+    from[0] + (to[0] - from[0]) * amount,
+    from[1] + (to[1] - from[1]) * amount,
+    from[2] + (to[2] - from[2]) * amount,
+  ];
+}
+
+function colorAt(position: number): Rgb {
+  const safePosition = clamp(position);
+
+  for (let index = 0; index < spectrumPalette.length - 1; index++) {
+    const left = spectrumPalette[index];
+    const right = spectrumPalette[index + 1];
+    if (safePosition >= left.position && safePosition <= right.position) {
+      return mixRgb(left.color, right.color, (safePosition - left.position) / (right.position - left.position));
+    }
+  }
+
+  return spectrumPalette[spectrumPalette.length - 1].color;
+}
+
+function colorForBand(index: number, bands: number): {gradient: string; glow: string; cap: string} {
+  const position = index / Math.max(1, bands - 1);
+  const base = colorAt(position);
+  const cap = rgbToHex(mixRgb(base, [255, 255, 255], 0.82));
+  const upper = rgbToHex(mixRgb(base, [255, 255, 255], 0.36));
+  const mid = rgbToHex(base);
+  const lower = rgbToHex(mixRgb(base, [15, 23, 42], 0.28));
+  return {
+    cap,
+    glow: rgbText(base),
+    gradient: `linear-gradient(180deg,${cap},${upper} 26%,${mid} 62%,${lower})`,
+  };
+}
+
+export const SpectrumVisualizer: React.FC<{spectrumFrames?: number[][]; progress: number; energy: number; bands?: number}> = ({
+  spectrumFrames,
+  progress,
+  energy,
+  bands = 96,
+}) => {
+  const sourceFrame = spectrumFrames?.length ? spectrumFrameAt(spectrumFrames, progress) : fallbackSpectrumFrame(48, progress, energy);
+  const safeEnergy = clamp(energy);
+  const renderedBands = Array.from({length: bands}, (_, index) => sampleBand(sourceFrame, (index / Math.max(1, bands - 1)) * Math.max(0, sourceFrame.length - 1)));
 
   return (
-    <div className="p2v-waveform" style={{'--wave-energy': clamp(energy).toString()} as React.CSSProperties}>
-      {Array.from({length: bars}, (_, index) => {
-        const sourceIndex = playheadPeakIndex + ((index - playheadBar) / playheadBar) * visibleHalfSpan;
-        const peak = samplePeak(source, sourceIndex);
-        const distanceFromPlayhead = Math.abs(index - playheadBar) / playheadBar;
-        const focusBoost = (1 - clamp(distanceFromPlayhead)) * clamp(energy) * 0.22;
-        const height = Math.max(5, Math.min(100, peak * 92 + 6 + focusBoost * 100));
-        const classes = ['p2v-wave-bar'];
-        if (sourceIndex >= 0 && sourceIndex < playheadPeakIndex) classes.push('is-played');
-        if (index === playheadBar) classes.push('is-playhead');
-        return <div className={classes.join(' ')} key={index} style={{height: `${height.toFixed(2)}%`}} />;
+    <div className="p2v-spectrum" style={{'--spectrum-energy': safeEnergy.toString()} as React.CSSProperties}>
+      {renderedBands.map((band, index) => {
+        const shaped = Math.pow(clamp(band), 0.58);
+        const bassWeight = 1 - index / Math.max(1, bands - 1);
+        const trebleSpark = Math.max(0, Math.sin(progress * Math.PI * 24 + index * 0.31));
+        const height = clamp(8 + shaped * 82 + safeEnergy * (bassWeight * 9 + trebleSpark * 6), 5, 100);
+        const brightness = clamp(0.58 + shaped * 0.32 + safeEnergy * 0.16, 0.52, 1);
+        const color = colorForBand(index, bands);
+        return (
+          <div
+            className="p2v-spectrum-bar is-spectrum"
+            key={index}
+            style={
+              {
+                '--bar-brightness': brightness.toFixed(3),
+                '--bar-cap': color.cap,
+                '--bar-gradient': color.gradient,
+                '--bar-glow': color.glow,
+                height: `${height.toFixed(2)}%`,
+              } as React.CSSProperties
+            }
+          />
+        );
       })}
     </div>
   );
 };
+
+export const Waveform = SpectrumVisualizer;

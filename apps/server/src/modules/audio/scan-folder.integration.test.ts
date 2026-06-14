@@ -25,5 +25,8 @@ describe('scanFolder integration', () => {
     expect(result.tracks[0].renderCoverPath).not.toMatch(/^file:|^[A-Za-z]:/);
     expect(result.tracks[0].waveformPeaks).toHaveLength(96);
     expect(result.tracks[0].waveformPeaks?.some((peak) => peak > 0)).toBe(true);
+    expect(result.tracks[0].spectrumFrames?.length).toBeGreaterThan(0);
+    expect(result.tracks[0].spectrumFrames?.[0]).toHaveLength(48);
+    expect(result.tracks[0].spectrumFrames?.flat().some((band) => band > 0)).toBe(true);
   }, 30000);
 });

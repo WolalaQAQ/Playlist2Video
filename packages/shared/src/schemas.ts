@@ -14,6 +14,7 @@ export const TrackSchema = z.object({
   audioPreviewUrl: z.string().nullable().optional(),
   coverPreviewUrl: z.string().nullable().optional(),
   waveformPeaks: z.array(z.number().min(0).max(1)).optional(),
+  spectrumFrames: z.array(z.array(z.number().min(0).max(1))).optional(),
   order: z.number().int().nonnegative(),
 });
 

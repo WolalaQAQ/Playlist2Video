@@ -4,6 +4,7 @@ import type {Track} from '@playlist2video/shared';
 import {writeCoverAsset, writeFallbackCover} from '../assets/cover-assets';
 import {isSupportedAudioFile} from './audio-file';
 import {buildTrackFromMetadata, readAudioMetadata} from './metadata';
+import {extractSpectrumFrames} from './spectrum';
 import {extractWaveformPeaks} from './waveform';
 
 export interface ScanFolderResult {
@@ -34,7 +35,8 @@ export async function scanFolder(options: {folderPath: string; assetsDir: string
       const cover = (await writeCoverAsset({metadata, assetsDir: options.assetsDir, trackId: base.id})) ??
         (await writeFallbackCover({assetsDir: options.assetsDir, trackId: base.id, title: base.title}));
       const waveformPeaks = await extractWaveformPeaks({filePath, samples: 96});
-      tracks.push({...base, coverPath: cover.filePath, renderCoverPath: cover.renderPath, waveformPeaks});
+      const spectrumFrames = await extractSpectrumFrames({filePath, bands: 48, framesPerSecond: 12});
+      tracks.push({...base, coverPath: cover.filePath, renderCoverPath: cover.renderPath, waveformPeaks, spectrumFrames});
     } catch (error) {
       warnings.push(`Skipped ${filePath}: ${error instanceof Error ? error.message : 'unknown error'}`);
     }
