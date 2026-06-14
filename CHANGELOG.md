@@ -16,4 +16,5 @@
 ### Notes & Caveats
 - The MVP is local-only.
 - FFmpeg must be installed and available on `PATH`.
+- Verified the FFmpeg/Remotion path with generated fixture audio and an MP4 export probe; Remotion render assets are served from the workspace `assets` directory instead of `file://` paths.
 - Online playlist import, lyrics, desktop packaging, and additional themes remain future extensions.

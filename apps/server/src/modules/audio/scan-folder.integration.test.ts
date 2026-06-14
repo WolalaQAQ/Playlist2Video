@@ -21,5 +21,7 @@ describe('scanFolder integration', () => {
     expect(result.tracks[0].title).toContain('01 - sine');
     expect(result.tracks[0].durationSeconds).toBeGreaterThan(0);
     expect(result.tracks[0].coverPath).toContain('fallback');
+    expect(result.tracks[0].renderCoverPath).toMatch(/fallback\.jpg$/);
+    expect(result.tracks[0].renderCoverPath).not.toMatch(/^file:|^[A-Za-z]:/);
   }, 30000);
 });

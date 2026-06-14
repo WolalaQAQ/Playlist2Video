@@ -1,5 +1,5 @@
 import React from 'react';
-import {Img, interpolate, useCurrentFrame, useVideoConfig} from 'remotion';
+import {Img, interpolate, staticFile, useCurrentFrame, useVideoConfig} from 'remotion';
 import {buildTimeline, findTrackAtTime, getTotalDuration} from '@playlist2video/shared';
 import type {PlaylistVideoProps} from '../../PlaylistVideo';
 import {BeatEffects} from './BeatEffects';
@@ -31,7 +31,7 @@ export const PlaylistV4Theme: React.FC<PlaylistVideoProps> = ({project}) => {
         <section className="p2v-now">
           <div className="p2v-cover-wrap">
             <div className="p2v-cover-glow" style={{transform: `scale(${1 + energy * 0.06})`}} />
-            {currentTrack.coverPath ? <Img className="p2v-cover" src={`file://${currentTrack.coverPath}`} /> : <div className="p2v-cover" />}
+            {currentTrack.renderCoverPath ? <Img className="p2v-cover" src={staticFile(currentTrack.renderCoverPath)} /> : <div className="p2v-cover" />}
           </div>
           <div className="p2v-copy">
             <div className="p2v-kicker">NOW PLAYING · {String(index + 1).padStart(2, '0')} / {timeline.length}</div>

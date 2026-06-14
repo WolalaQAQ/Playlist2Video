@@ -10,6 +10,7 @@ export const TrackSchema = z.object({
   album: z.string().nullable(),
   durationSeconds: z.number().positive(),
   coverPath: z.string().nullable(),
+  renderCoverPath: z.string().nullable().optional(),
   order: z.number().int().nonnegative(),
 });
 

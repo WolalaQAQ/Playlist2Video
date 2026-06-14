@@ -18,6 +18,10 @@ export function getOutputPath(outputDir: string, outputFileName: string): string
   return resolveInside(outputDir, outputFileName);
 }
 
+export function getRemotionEntryPoint(): string {
+  return path.resolve('packages/video-template/src/render-entry.tsx');
+}
+
 export async function exportProject(options: {project: Project; outputDir: string; workspaceDir: string; onProgress?: (progress: number) => void}): Promise<{outputPath: string}> {
   await fs.mkdir(options.outputDir, {recursive: true});
   const tempDir = path.join(options.workspaceDir, '.tmp', `export-${Date.now()}`);
@@ -33,7 +37,7 @@ export async function exportProject(options: {project: Project; outputDir: strin
   await execa('ffmpeg', ['-y', '-f', 'concat', '-safe', '0', '-i', concatListPath, '-c:a', 'aac', '-b:a', '192k', concatAudioPath]);
   options.onProgress?.(0.2);
 
-  const serveUrl = await bundle({entryPoint: path.resolve('packages/video-template/src/Root.tsx')});
+  const serveUrl = await bundle({entryPoint: getRemotionEntryPoint(), publicDir: path.join(options.workspaceDir, 'assets')});
   const composition = await selectComposition({serveUrl, id: 'PlaylistVideo', inputProps: {project: options.project}});
   await renderMedia({
     composition,

@@ -12,9 +12,9 @@ describe('cover assets', () => {
 
     const outputPath = await writeFallbackCover({assetsDir, trackId: 'track-1', title: 'Alpha'});
 
-    expect(outputPath).toBe(path.join(assetsDir, 'track-1-fallback.jpg'));
-    await expect(fs.access(outputPath)).resolves.toBeUndefined();
-    const metadata = await sharp(outputPath).metadata();
+    expect(outputPath).toEqual({filePath: path.join(assetsDir, 'track-1-fallback.jpg'), renderPath: 'track-1-fallback.jpg'});
+    await expect(fs.access(outputPath.filePath)).resolves.toBeUndefined();
+    const metadata = await sharp(outputPath.filePath).metadata();
     expect(metadata.format).toBe('jpeg');
     expect(metadata.width).toBe(900);
     expect(metadata.height).toBe(900);
@@ -32,9 +32,9 @@ describe('cover assets', () => {
 
     const outputPath = await writeCoverAsset({assetsDir, trackId: 'track-2', metadata});
 
-    expect(outputPath).toBe(path.join(assetsDir, 'track-2.jpg'));
+    expect(outputPath).toEqual({filePath: path.join(assetsDir, 'track-2.jpg'), renderPath: 'track-2.jpg'});
     if (outputPath === null) throw new Error('Expected embedded artwork to produce a cover path');
-    const image = await sharp(outputPath).metadata();
+    const image = await sharp(outputPath.filePath).metadata();
     expect(image.format).toBe('jpeg');
     expect(image.width).toBe(900);
     expect(image.height).toBe(900);

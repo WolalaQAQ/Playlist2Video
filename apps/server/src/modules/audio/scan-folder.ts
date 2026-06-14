@@ -30,9 +30,9 @@ export async function scanFolder(options: {folderPath: string; assetsDir: string
         continue;
       }
       const base = buildTrackFromMetadata({filePath, order, durationSeconds, metadata, coverPath: null});
-      const coverPath = (await writeCoverAsset({metadata, assetsDir: options.assetsDir, trackId: base.id})) ??
+      const cover = (await writeCoverAsset({metadata, assetsDir: options.assetsDir, trackId: base.id})) ??
         (await writeFallbackCover({assetsDir: options.assetsDir, trackId: base.id, title: base.title}));
-      tracks.push({...base, coverPath});
+      tracks.push({...base, coverPath: cover.filePath, renderCoverPath: cover.renderPath});
     } catch (error) {
       warnings.push(`Skipped ${filePath}: ${error instanceof Error ? error.message : 'unknown error'}`);
     }
