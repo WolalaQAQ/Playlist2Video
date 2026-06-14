@@ -6,9 +6,9 @@ coverage/
 .env.*
 !.env.example
 .superpowers/
-output/
-assets/
-.tmp/
+/output/
+/assets/
+/.tmp/
 *.log
 .DS_Store
 .worktrees/
