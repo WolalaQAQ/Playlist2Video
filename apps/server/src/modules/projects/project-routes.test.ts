@@ -65,4 +65,22 @@ describe('project routes media preview', () => {
     expect(missingResponse.statusCode).toBe(404);
     await app.close();
   });
+
+  it('supports HTTP range requests for audio seeking', async () => {
+    const {config} = await setupProject();
+    const app = await buildApp(config);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/projects/current/media/track-1/audio',
+      headers: {range: 'bytes=2-6'},
+    });
+
+    expect(response.statusCode).toBe(206);
+    expect(response.headers['accept-ranges']).toBe('bytes');
+    expect(response.headers['content-range']).toBe('bytes 2-6/11');
+    expect(response.headers['content-length']).toBe('5');
+    expect(response.body).toBe('dio-b');
+    await app.close();
+  });
 });

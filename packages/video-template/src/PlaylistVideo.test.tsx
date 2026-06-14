@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import React from 'react';
 import {render, screen} from '@testing-library/react';
-import {describe, expect, it, vi} from 'vitest';
+import {beforeEach, describe, expect, it, vi} from 'vitest';
 import type {Project} from '@playlist2video/shared';
 import {PlaylistVideo} from './PlaylistVideo';
+
+const remotionState = vi.hoisted(() => ({currentFrame: 0}));
 
 vi.mock('remotion', async () => {
   const ReactActual = await vi.importActual<typeof React>('react');
@@ -15,7 +17,7 @@ vi.mock('remotion', async () => {
     Sequence: ({children, from, durationInFrames}: {children: React.ReactNode; from: number; durationInFrames: number}) =>
       ReactActual.createElement('div', {'data-sequence-from': from, 'data-sequence-duration': durationInFrames}, children),
     staticFile: (input: string) => `/static/${input}`,
-    useCurrentFrame: () => 0,
+    useCurrentFrame: () => remotionState.currentFrame,
     useVideoConfig: () => ({fps: 30}),
   };
 });
@@ -36,6 +38,7 @@ const project: Project = {
       renderCoverPath: 'cover.jpg',
       audioPreviewUrl: 'http://127.0.0.1:4317/api/v1/projects/current/media/track-1/audio?v=01.mp3',
       coverPreviewUrl: 'http://127.0.0.1:4317/api/v1/projects/current/media/track-1/cover?v=cover.jpg',
+      waveformPeaks: [0.1, 0.8, 0.4, 0.2, 0.9, 0.3, 0.7, 0.15, 0.55, 1],
       order: 0,
     },
     {
@@ -49,6 +52,7 @@ const project: Project = {
       renderCoverPath: null,
       audioPreviewUrl: 'http://127.0.0.1:4317/api/v1/projects/current/media/track-2/audio?v=02.mp3',
       coverPreviewUrl: null,
+      waveformPeaks: [0.2, 0.6, 1],
       order: 1,
     },
   ],
@@ -59,6 +63,10 @@ const project: Project = {
 };
 
 describe('PlaylistVideo', () => {
+  beforeEach(() => {
+    remotionState.currentFrame = 0;
+  });
+
   it('renders sequenced audio tags for preview playback', () => {
     render(<PlaylistVideo project={project} />);
 
@@ -76,5 +84,34 @@ describe('PlaylistVideo', () => {
     render(<PlaylistVideo project={project} />);
 
     expect(document.querySelector('.p2v-cover')?.getAttribute('src')).toBe('http://127.0.0.1:4317/api/v1/projects/current/media/track-1/cover?v=cover.jpg');
+  });
+
+  it('renders waveform bars from track peak data', () => {
+    render(<PlaylistVideo project={project} />);
+
+    const bars = Array.from(document.querySelectorAll<HTMLElement>('.p2v-wave-bar'));
+    expect(bars).toHaveLength(96);
+    expect(bars.some((bar) => Number.parseFloat(bar.style.height) > 50)).toBe(true);
+  });
+
+  it('scrolls waveform bars as playback advances through the current track', () => {
+    remotionState.currentFrame = 0;
+    const {rerender} = render(<PlaylistVideo project={project} />);
+    const initialHeights = Array.from(document.querySelectorAll<HTMLElement>('.p2v-wave-bar')).map((bar) => bar.style.height);
+
+    remotionState.currentFrame = 45;
+    rerender(<PlaylistVideo project={project} />);
+    const laterHeights = Array.from(document.querySelectorAll<HTMLElement>('.p2v-wave-bar')).map((bar) => bar.style.height);
+
+    expect(laterHeights).not.toEqual(initialHeights);
+  });
+
+  it('marks played bars and the centered playhead in the waveform', () => {
+    remotionState.currentFrame = 45;
+    render(<PlaylistVideo project={project} />);
+
+    const bars = Array.from(document.querySelectorAll<HTMLElement>('.p2v-wave-bar'));
+    expect(bars.some((bar) => bar.classList.contains('is-played'))).toBe(true);
+    expect(bars.filter((bar) => bar.classList.contains('is-playhead'))).toHaveLength(1);
   });
 });

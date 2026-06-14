@@ -11,6 +11,9 @@
 ### Fixes
 - Added browser-safe preview media URLs for scanned audio and extracted covers so Web UI preview can play sound and display embedded artwork.
 - Served preview media only from tracks in the current project, avoiding arbitrary local file reads.
+- Added HTTP Range support for preview media so audio can resume after seeking in the preview player.
+- Replaced decorative fake waveform bars with waveform peaks extracted from the actual audio files during scan.
+- Animated the real waveform as a playback-synchronized sliding window with played/playhead highlighting and beat-reactive glow.
 
 ### Design Rationale
 - Used a TypeScript stack to keep UI, server, shared contracts, and Remotion rendering aligned.

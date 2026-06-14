@@ -4,6 +4,7 @@ import type {Track} from '@playlist2video/shared';
 import {writeCoverAsset, writeFallbackCover} from '../assets/cover-assets';
 import {isSupportedAudioFile} from './audio-file';
 import {buildTrackFromMetadata, readAudioMetadata} from './metadata';
+import {extractWaveformPeaks} from './waveform';
 
 export interface ScanFolderResult {
   tracks: Track[];
@@ -32,7 +33,8 @@ export async function scanFolder(options: {folderPath: string; assetsDir: string
       const base = buildTrackFromMetadata({filePath, order, durationSeconds, metadata, coverPath: null});
       const cover = (await writeCoverAsset({metadata, assetsDir: options.assetsDir, trackId: base.id})) ??
         (await writeFallbackCover({assetsDir: options.assetsDir, trackId: base.id, title: base.title}));
-      tracks.push({...base, coverPath: cover.filePath, renderCoverPath: cover.renderPath});
+      const waveformPeaks = await extractWaveformPeaks({filePath, samples: 96});
+      tracks.push({...base, coverPath: cover.filePath, renderCoverPath: cover.renderPath, waveformPeaks});
     } catch (error) {
       warnings.push(`Skipped ${filePath}: ${error instanceof Error ? error.message : 'unknown error'}`);
     }

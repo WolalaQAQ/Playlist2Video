@@ -29,6 +29,39 @@ const contentTypes: Record<string, string> = {
   '.webp': 'image/webp',
 };
 
+function parseRangeHeader(rangeHeader: string | undefined, fileSize: number): {start: number; end: number} | null {
+  if (!rangeHeader) return null;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
+  if (!match) return null;
+
+  const [, startText, endText] = match;
+  if (!startText && !endText) return null;
+
+  if (!startText) {
+    const suffixLength = Number(endText);
+    if (!Number.isInteger(suffixLength) || suffixLength <= 0) return null;
+    const start = Math.max(0, fileSize - suffixLength);
+    return {start, end: fileSize - 1};
+  }
+
+  const start = Number(startText);
+  const end = endText ? Number(endText) : fileSize - 1;
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || start >= fileSize) return null;
+  return {start, end: Math.min(end, fileSize - 1)};
+}
+
+async function readFileRange(filePath: string, range: {start: number; end: number}): Promise<Buffer> {
+  const file = await fs.open(filePath, 'r');
+  try {
+    const length = range.end - range.start + 1;
+    const buffer = Buffer.alloc(length);
+    await file.read(buffer, 0, length, range.start);
+    return buffer;
+  } finally {
+    await file.close();
+  }
+}
+
 export async function registerProjectRoutes(app: FastifyInstance, config: ServerConfig): Promise<void> {
   const store = new ProjectStore(config.workspaceDir);
 
@@ -55,7 +88,18 @@ export async function registerProjectRoutes(app: FastifyInstance, config: Server
     const mediaPath = resolveProjectMediaPath(project, params.trackId, params.kind);
     if (!mediaPath) throw new AppError('media_not_found', 'Media file was not found in the current project', 404);
     const contentType = contentTypes[path.extname(mediaPath).toLowerCase()] ?? 'application/octet-stream';
+    const fileSize = (await fs.stat(mediaPath)).size;
+    const range = parseRangeHeader(request.headers.range, fileSize);
     reply.header('Content-Type', contentType);
+    reply.header('Accept-Ranges', 'bytes');
+    if (range) {
+      const chunk = await readFileRange(mediaPath, range);
+      reply.status(206);
+      reply.header('Content-Range', `bytes ${range.start}-${range.end}/${fileSize}`);
+      reply.header('Content-Length', String(chunk.length));
+      return reply.send(chunk);
+    }
+    reply.header('Content-Length', String(fileSize));
     return reply.send(await fs.readFile(mediaPath));
   });
 

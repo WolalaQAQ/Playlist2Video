@@ -18,7 +18,7 @@ export const PlaylistV4Theme: React.FC<PlaylistVideoProps> = ({project}) => {
   const totalDurationSeconds = getTotalDuration(timeline);
   const index = currentTrack ? timeline.findIndex((track) => track.id === currentTrack.id) : 0;
   const localTime = currentTrack ? currentTime - currentTrack.startSeconds : 0;
-  const progress = currentTrack ? localTime / currentTrack.durationSeconds : 0;
+  const progress = currentTrack ? Math.max(0, Math.min(1, localTime / currentTrack.durationSeconds)) : 0;
   const energy = interpolate(Math.sin(frame / 5), [-1, 1], [0.15, 1]);
   const audioTracks = timeline.filter((track) => track.audioPreviewUrl);
 
@@ -53,7 +53,7 @@ export const PlaylistV4Theme: React.FC<PlaylistVideoProps> = ({project}) => {
         </section>
         <PlaylistPanel timeline={timeline} currentTrackId={currentTrack.id} totalDurationSeconds={totalDurationSeconds} />
       </main>
-      <Waveform energy={energy} />
+      <Waveform peaks={currentTrack.waveformPeaks} progress={progress} energy={energy} />
     </div>
   );
 };
