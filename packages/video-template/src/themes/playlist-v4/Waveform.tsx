@@ -99,14 +99,19 @@ export const SpectrumVisualizer: React.FC<{spectrumFrames?: number[][]; progress
   const sourceFrame = spectrumFrames?.length ? spectrumFrameAt(spectrumFrames, progress) : fallbackSpectrumFrame(48, progress, energy);
   const safeEnergy = clamp(energy);
   const renderedBands = Array.from({length: bands}, (_, index) => sampleBand(sourceFrame, (index / Math.max(1, bands - 1)) * Math.max(0, sourceFrame.length - 1)));
+  const frameMin = renderedBands.reduce((lowest, value) => Math.min(lowest, value), 1);
+  const frameMax = renderedBands.reduce((highest, value) => Math.max(highest, value), 0);
+  const frameSpan = Math.max(0, frameMax - frameMin);
 
   return (
     <div className="p2v-spectrum" style={{'--spectrum-energy': safeEnergy.toString()} as React.CSSProperties}>
       {renderedBands.map((band, index) => {
-        const shaped = Math.pow(clamp(band), 0.58);
+        const localContrast = frameSpan > 0.015 ? (clamp(band) - frameMin) / frameSpan : clamp(band);
+        const shaped = Math.pow(clamp(localContrast * 0.74 + clamp(band) * 0.26), 0.48);
         const bassWeight = 1 - index / Math.max(1, bands - 1);
         const trebleSpark = Math.max(0, Math.sin(progress * Math.PI * 24 + index * 0.31));
-        const height = clamp(8 + shaped * 82 + safeEnergy * (bassWeight * 9 + trebleSpark * 6), 5, 100);
+        const transientLift = Math.max(0, localContrast - clamp(band)) * (18 + safeEnergy * 10);
+        const height = clamp(10 + shaped * 86 + transientLift + safeEnergy * (bassWeight * 12 + trebleSpark * 9), 5, 100);
         const brightness = clamp(0.58 + shaped * 0.32 + safeEnergy * 0.16, 0.52, 1);
         const color = colorForBand(index, bands);
         return (

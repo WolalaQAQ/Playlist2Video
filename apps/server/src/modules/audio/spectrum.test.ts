@@ -31,6 +31,21 @@ describe('extractSpectrumFrames', () => {
     expect(frames.flat().some((value) => value > 0.25)).toBe(true);
   }, 30000);
 
+  it('uses high-density frames by default for smooth 30fps preview motion', async () => {
+    if (!(await hasFfmpeg())) {
+      console.warn('Skipping spectrum extraction test because ffmpeg is not available on PATH.');
+      return;
+    }
+
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'playlist2video-spectrum-'));
+    const audioPath = path.join(root, 'tone.wav');
+    await execa('ffmpeg', ['-y', '-f', 'lavfi', '-i', 'sine=frequency=880:duration=1', audioPath]);
+
+    const frames = await extractSpectrumFrames({filePath: audioPath, bands: 16});
+
+    expect(frames.length).toBeGreaterThanOrEqual(29);
+  }, 30000);
+
   it('places higher tones in higher frequency bands', async () => {
     if (!(await hasFfmpeg())) {
       console.warn('Skipping spectrum extraction test because ffmpeg is not available on PATH.');

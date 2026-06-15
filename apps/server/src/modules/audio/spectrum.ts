@@ -148,7 +148,7 @@ export async function extractSpectrumFrames(options: {
   windowSize?: number;
 }): Promise<number[][]> {
   const bands = options.bands ?? 48;
-  const framesPerSecond = options.framesPerSecond ?? 12;
+  const framesPerSecond = options.framesPerSecond ?? 30;
   const sampleRate = options.sampleRate ?? 8000;
   const windowSize = nextPowerOfTwo(options.windowSize ?? sampleRate / framesPerSecond);
 

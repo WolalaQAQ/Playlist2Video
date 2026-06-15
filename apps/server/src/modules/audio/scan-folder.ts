@@ -35,7 +35,7 @@ export async function scanFolder(options: {folderPath: string; assetsDir: string
       const cover = (await writeCoverAsset({metadata, assetsDir: options.assetsDir, trackId: base.id})) ??
         (await writeFallbackCover({assetsDir: options.assetsDir, trackId: base.id, title: base.title}));
       const waveformPeaks = await extractWaveformPeaks({filePath, samples: 96});
-      const spectrumFrames = await extractSpectrumFrames({filePath, bands: 48, framesPerSecond: 12});
+      const spectrumFrames = await extractSpectrumFrames({filePath, bands: 48});
       tracks.push({...base, coverPath: cover.filePath, renderCoverPath: cover.renderPath, waveformPeaks, spectrumFrames});
     } catch (error) {
       warnings.push(`Skipped ${filePath}: ${error instanceof Error ? error.message : 'unknown error'}`);

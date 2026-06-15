@@ -69,4 +69,11 @@ describe('SpectrumVisualizer', () => {
     expect(initial[0]).toBeGreaterThan(initial[7] + 40);
     expect(later[7]).toBeGreaterThan(later[0] + 40);
   });
+
+  it('expands subtle band differences into visible bar movement', () => {
+    render(<SpectrumVisualizer spectrumFrames={[[0.18, 0.22, 0.2, 0.24, 0.19, 0.23, 0.21, 0.25]]} progress={0} energy={0.4} bands={8} />);
+
+    const heights = renderedHeights();
+    expect(Math.max(...heights) - Math.min(...heights)).toBeGreaterThan(28);
+  });
 });
