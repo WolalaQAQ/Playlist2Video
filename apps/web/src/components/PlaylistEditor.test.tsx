@@ -3,6 +3,7 @@ import React from 'react';
 import {fireEvent, render, screen} from '@testing-library/react';
 import {describe, expect, it, vi} from 'vitest';
 import type {Project, Track} from '@playlist2video/shared';
+import {translations} from '../i18n';
 import {PlaylistEditor} from './PlaylistEditor';
 
 function track(id: string, title: string, order: number): Track {
@@ -44,14 +45,14 @@ function createDataTransfer() {
 
 describe('PlaylistEditor', () => {
   it('uses browser-safe cover preview URLs instead of file URLs', () => {
-    render(<PlaylistEditor project={project} onReorder={vi.fn()} onUpdateTrack={vi.fn()} />);
+    render(<PlaylistEditor copy={translations.en.playlist} project={project} onReorder={vi.fn()} onUpdateTrack={vi.fn()} />);
 
     expect(screen.getByRole('presentation').getAttribute('src')).toBe('http://127.0.0.1:4317/api/v1/projects/current/media/track-1/cover?v=cover.jpg');
   });
 
   it('reorders tracks by native drag events', () => {
     const onReorder = vi.fn();
-    render(<PlaylistEditor project={project} onReorder={onReorder} onUpdateTrack={vi.fn()} />);
+    render(<PlaylistEditor copy={translations.en.playlist} project={project} onReorder={onReorder} onUpdateTrack={vi.fn()} />);
     const dataTransfer = createDataTransfer();
 
     fireEvent.dragStart(screen.getByRole('button', {name: 'Drag Gamma'}), {dataTransfer});
@@ -63,7 +64,7 @@ describe('PlaylistEditor', () => {
   });
   it('reorders tracks with a mouse drag over another row', () => {
     const onReorder = vi.fn();
-    render(<PlaylistEditor project={project} onReorder={onReorder} onUpdateTrack={vi.fn()} />);
+    render(<PlaylistEditor copy={translations.en.playlist} project={project} onReorder={onReorder} onUpdateTrack={vi.fn()} />);
     const targetRow = screen.getByLabelText('Track 1: Alpha');
     const originalElementsFromPoint = document.elementsFromPoint;
     Object.defineProperty(document, 'elementsFromPoint', {

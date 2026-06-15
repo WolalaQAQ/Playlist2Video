@@ -1,13 +1,13 @@
 import React from 'react';
-import {themeOptions} from '@playlist2video/shared';
+import type {Translation} from '../i18n';
 
-export const ThemePanel: React.FC = () => (
+export const ThemePanel: React.FC<{copy: Translation['theme']}> = ({copy}) => (
   <section className="card">
-    <h2>Theme</h2>
+    <h2>{copy.title}</h2>
     <div className="theme-option selected">
-      <strong>{themeOptions[0].name}</strong>
-      <p>{themeOptions[0].description}</p>
-      <span>Selected</span>
+      <strong>{copy.name}</strong>
+      <p>{copy.description}</p>
+      <span>{copy.selected}</span>
     </div>
   </section>
 );

@@ -1,5 +1,6 @@
 import React, {useCallback, useEffect, useMemo, useState} from 'react';
 import type {Project, Track} from '@playlist2video/shared';
+import type {Translation} from '../i18n';
 
 function sortTracks(tracks: Track[]): Track[] {
   return [...tracks].sort((a, b) => a.order - b.order);
@@ -25,10 +26,11 @@ function findTrackIdAtPoint(x: number, y: number): string | null {
 }
 
 export const PlaylistEditor: React.FC<{
+  copy: Translation['playlist'];
   project: Project;
   onReorder: (trackIds: string[]) => void | Promise<Project>;
   onUpdateTrack: (input: {trackId: string; title: string; artist: string}) => void;
-}> = ({project, onReorder, onUpdateTrack}) => {
+}> = ({copy, project, onReorder, onUpdateTrack}) => {
   const sortedProjectTracks = useMemo(() => sortTracks(project.tracks), [project.tracks]);
   const [tracks, setTracks] = useState<Track[]>(sortedProjectTracks);
   const [draggedTrackId, setDraggedTrackId] = useState<string | null>(null);
@@ -81,12 +83,12 @@ export const PlaylistEditor: React.FC<{
 
   return (
     <section className="card playlist-editor">
-      <div className="section-heading"><h2>Playlist</h2><span>{tracks.length} tracks</span></div>
-      <p className="playlist-help">拖动每首歌左侧的手柄来调整顺序；只会保存歌单顺序，不会自动生成视频。</p>
+      <div className="section-heading"><h2>{copy.title}</h2><span>{copy.trackCount(tracks.length)}</span></div>
+      <p className="playlist-help">{copy.help}</p>
       <div className="track-list">
         {tracks.map((track, index) => (
           <article
-            aria-label={`Track ${index + 1}: ${track.title}`}
+            aria-label={copy.trackLabel(index + 1, track.title)}
             className={`track-row${draggedTrackId === track.id || mouseDragTrackId === track.id ? ' dragging' : ''}`}
             data-track-id={track.id}
             key={track.id}
@@ -94,7 +96,7 @@ export const PlaylistEditor: React.FC<{
             onDrop={(event) => handleDrop(track.id, event)}
           >
             <button
-              aria-label={`Drag ${track.title}`}
+              aria-label={copy.dragLabel(track.title)}
               className="drag-handle"
               draggable
               onDragEnd={() => setDraggedTrackId(null)}
@@ -107,7 +109,7 @@ export const PlaylistEditor: React.FC<{
                 if (event.button !== 0) return;
                 setMouseDragTrackId(track.id);
               }}
-              title="Drag to reorder"
+              title={copy.dragTitle}
               type="button"
             >
               <span aria-hidden="true">☰</span>
@@ -115,8 +117,8 @@ export const PlaylistEditor: React.FC<{
             </button>
             {track.coverPreviewUrl ? <img src={track.coverPreviewUrl} alt="" /> : <div className="cover-placeholder" />}
             <div>
-              <input aria-label="Track title" value={track.title} onChange={(event) => onUpdateTrack({trackId: track.id, title: event.target.value, artist: track.artist})} />
-              <input aria-label="Track artist" value={track.artist} onChange={(event) => onUpdateTrack({trackId: track.id, title: track.title, artist: event.target.value})} />
+              <input aria-label={copy.titleInputLabel} value={track.title} onChange={(event) => onUpdateTrack({trackId: track.id, title: event.target.value, artist: track.artist})} />
+              <input aria-label={copy.artistInputLabel} value={track.artist} onChange={(event) => onUpdateTrack({trackId: track.id, title: track.title, artist: event.target.value})} />
             </div>
             <time>{Math.floor(track.durationSeconds / 60)}:{Math.floor(track.durationSeconds % 60).toString().padStart(2, '0')}</time>
           </article>

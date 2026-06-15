@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.4] - 2026-06-16
+### Features
+- Kept `README.md` as the English README and added a separate `README_zh.md` Chinese README with cross-file language links.
+- Added Web UI language switching between Chinese and English.
+
+### Design Rationale
+- Kept localization lightweight with a typed frontend translation dictionary instead of adding a full i18n dependency.
+- Persisted the selected language in browser local storage so repeat visits keep the user's choice.
+
+### Notes & Caveats
+- User-entered project data, scanned metadata, warnings, and backend error messages are displayed as returned and are not machine-translated.
 ## [0.1.3] - 2026-06-16
 ### Features
 - Linked playlist-v4 visual effects to the active track's real spectrum energy.
@@ -66,4 +77,3 @@
 - FFmpeg must be installed and available on `PATH`.
 - Verified the FFmpeg/Remotion path with generated fixture audio and an MP4 export probe; Remotion render assets are served from the workspace `assets` directory instead of `file://` paths.
 - Online playlist import, lyrics, desktop packaging, and additional themes remain future extensions.
-

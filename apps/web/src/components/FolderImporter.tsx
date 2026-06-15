@@ -1,14 +1,19 @@
 import React, {useState} from 'react';
+import type {Translation} from '../i18n';
 
-export const FolderImporter: React.FC<{loading: boolean; onScan: (folderPath: string) => void}> = ({loading, onScan}) => {
+export const FolderImporter: React.FC<{
+  copy: Translation['folderImporter'];
+  loading: boolean;
+  onScan: (folderPath: string) => void;
+}> = ({copy, loading, onScan}) => {
   const [folderPath, setFolderPath] = useState('');
   return (
     <section className="card">
-      <h2>Import local audio folder</h2>
-      <p>Enter a local folder path containing MP3, FLAC, WAV, M4A, AAC, or OGG files.</p>
+      <h2>{copy.title}</h2>
+      <p>{copy.description}</p>
       <form onSubmit={(event) => { event.preventDefault(); onScan(folderPath); }}>
-        <input value={folderPath} onChange={(event) => setFolderPath(event.target.value)} placeholder="C:\\Users\\You\\Music\\Playlist" />
-        <button disabled={loading || folderPath.trim().length === 0}>{loading ? 'Scanning...' : 'Scan folder'}</button>
+        <input value={folderPath} onChange={(event) => setFolderPath(event.target.value)} placeholder={copy.placeholder} />
+        <button disabled={loading || folderPath.trim().length === 0}>{loading ? copy.scanningButton : copy.scanButton}</button>
       </form>
     </section>
   );

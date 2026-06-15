@@ -67,6 +67,8 @@ const reorderedProject = projectWithTracks([track('track-1', 'Alpha', 1), track(
 
 describe('App preview generation', () => {
   beforeEach(() => {
+    window.localStorage.clear();
+    document.documentElement.lang = '';
     vi.mocked(client.scanFolder).mockResolvedValue({project: scannedProject, warnings: []});
     vi.mocked(client.reorderTracks).mockResolvedValue(reorderedProject);
     vi.mocked(client.updateTrackMetadata).mockImplementation(async ({trackId, title, artist}) => ({
@@ -76,18 +78,38 @@ describe('App preview generation', () => {
     vi.mocked(client.exportCurrentProject).mockResolvedValue({outputPath: 'C:/out/playlist-video.mp4'});
   });
 
+  it('renders Chinese by default and switches the Web UI to English', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(screen.getByRole('heading', {name: '把本地音乐文件夹转换为歌单视频。'})).toBeInTheDocument();
+    expect(screen.getByRole('button', {name: '扫描文件夹'})).toBeInTheDocument();
+    expect(document.documentElement.lang).toBe('zh-CN');
+
+    await user.click(screen.getByRole('button', {name: 'English'}));
+
+    expect(screen.getByRole('heading', {name: 'Turn a local music folder into a playlist video.'})).toBeInTheDocument();
+    expect(screen.getByRole('button', {name: 'Scan folder'})).toBeInTheDocument();
+    expect(document.documentElement.lang).toBe('en');
+
+    await user.click(screen.getByRole('button', {name: '中文'}));
+
+    expect(screen.getByRole('heading', {name: '把本地音乐文件夹转换为歌单视频。'})).toBeInTheDocument();
+    expect(document.documentElement.lang).toBe('zh-CN');
+  });
+
   it('does not render a video preview after scan until Generate video is clicked', async () => {
     const user = userEvent.setup();
     render(<App />);
 
     await user.type(screen.getByRole('textbox'), 'C:\\Music');
-    await user.click(screen.getByRole('button', {name: 'Scan folder'}));
+    await user.click(screen.getByRole('button', {name: '扫描文件夹'}));
 
     expect(await screen.findByDisplayValue('Alpha')).toBeInTheDocument();
     expect(screen.queryByTestId('remotion-player')).not.toBeInTheDocument();
     expect(client.exportCurrentProject).not.toHaveBeenCalled();
 
-    await user.click(screen.getByRole('button', {name: 'Generate video'}));
+    await user.click(screen.getByRole('button', {name: '生成视频'}));
 
     expect(screen.getByTestId('remotion-player')).toHaveTextContent('Alpha > Beta');
     expect(client.exportCurrentProject).not.toHaveBeenCalled();
@@ -98,20 +120,20 @@ describe('App preview generation', () => {
     render(<App />);
 
     await user.type(screen.getByRole('textbox'), 'C:\\Music');
-    await user.click(screen.getByRole('button', {name: 'Scan folder'}));
+    await user.click(screen.getByRole('button', {name: '扫描文件夹'}));
     await screen.findByDisplayValue('Alpha');
-    await user.click(screen.getByRole('button', {name: 'Generate video'}));
+    await user.click(screen.getByRole('button', {name: '生成视频'}));
     expect(screen.getByTestId('remotion-player')).toHaveTextContent('Alpha > Beta');
 
     const dataTransfer = createDataTransfer();
-    fireEvent.dragStart(screen.getByRole('button', {name: 'Drag Beta'}), {dataTransfer});
-    fireEvent.dragOver(screen.getByLabelText('Track 1: Alpha'), {dataTransfer});
-    fireEvent.drop(screen.getByLabelText('Track 1: Alpha'), {dataTransfer});
+    fireEvent.dragStart(screen.getByRole('button', {name: '拖动 Beta'}), {dataTransfer});
+    fireEvent.dragOver(screen.getByLabelText('第 1 首：Alpha'), {dataTransfer});
+    fireEvent.drop(screen.getByLabelText('第 1 首：Alpha'), {dataTransfer});
 
     expect(client.reorderTracks).toHaveBeenCalledWith(['track-2', 'track-1']);
     expect(screen.getByTestId('remotion-player')).toHaveTextContent('Alpha > Beta');
 
-    await user.click(screen.getByRole('button', {name: 'Generate video'}));
+    await user.click(screen.getByRole('button', {name: '生成视频'}));
 
     expect(screen.getByTestId('remotion-player')).toHaveTextContent('Beta > Alpha');
   });

@@ -1,5 +1,7 @@
 # Playlist2Video
 
+**Language:** English | [中文](README_zh.md)
+
 Playlist2Video is a local Web UI for turning a folder of audio files into a Remotion-powered playlist video.
 
 It scans local audio folders, extracts metadata and artwork, lets you reorder tracks with mouse drag-and-drop, generates an in-browser preview on demand, and exports a 1080p MP4 when you are ready.
@@ -42,6 +44,10 @@ It includes:
 - Highlighting for the current track.
 - Full-width bottom realtime frequency spectrum.
 - Beat-reactive glow, flashes, pulse rings, particles, and cover shine.
+
+## Multilingual Web UI
+
+The Web UI header includes a language switcher for Chinese and English. The selected language is saved in browser local storage.
 
 ## Verification
 
