@@ -3,7 +3,11 @@ const apiBase = 'http://127.0.0.1:4317/api/v1';
 interface ApiSuccess<T> { data: T }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(`${apiBase}${path}`, {headers: {'Content-Type': 'application/json', ...options?.headers}, ...options});
+  const headers = new Headers(options?.headers);
+  if (options?.body != null && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+  const response = await fetch(`${apiBase}${path}`, {...options, headers});
   const body = await response.json();
   if (!response.ok) throw new Error(body.error?.message ?? 'Request failed');
   return (body as ApiSuccess<T>).data;

@@ -1,10 +1,13 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {bundle} from '@remotion/bundler';
 import {renderMedia, selectComposition} from '@remotion/renderer';
 import type {ExportConfig, Project} from '@playlist2video/shared';
 import {execa} from 'execa';
 import {resolveInside} from '../../lib/path-safety';
+
+const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
 export function escapeFfmpegConcatPath(filePath: string): string {
   return filePath.replaceAll("'", "'\\''");
@@ -19,7 +22,7 @@ export function getOutputPath(outputDir: string, outputFileName: string): string
 }
 
 export function getRemotionEntryPoint(): string {
-  return path.resolve('packages/video-template/src/render-entry.tsx');
+  return path.resolve(moduleDir, '../../../../..', 'packages/video-template/src/render-entry.tsx');
 }
 
 export function buildAudioFfmpegArgs(concatListPath: string, concatAudioPath: string, exportConfig: ExportConfig): string[] {
