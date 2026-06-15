@@ -1,4 +1,8 @@
 // @vitest-environment jsdom
+/// <reference types="node" />
+import {readFileSync} from 'node:fs';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 import React from 'react';
 import {render, screen} from '@testing-library/react';
 import {beforeEach, describe, expect, it, vi} from 'vitest';
@@ -6,6 +10,7 @@ import type {Project} from '@playlist2video/shared';
 import {PlaylistVideo} from './PlaylistVideo';
 
 const remotionState = vi.hoisted(() => ({currentFrame: 0}));
+const themeCssPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'themes', 'playlist-v4', 'theme.css');
 
 vi.mock('remotion', async () => {
   const ReactActual = await vi.importActual<typeof React>('react');
@@ -119,5 +124,33 @@ describe('PlaylistVideo', () => {
     expect(bars.every((bar) => bar.classList.contains('is-spectrum'))).toBe(true);
     expect(bars.some((bar) => bar.classList.contains('is-played'))).toBe(false);
     expect(bars.some((bar) => bar.classList.contains('is-playhead'))).toBe(false);
+  });
+
+  it('formats the now playing position with two-digit current and total counts', () => {
+    const fourTrackProject: Project = {
+      ...project,
+      tracks: [
+        ...project.tracks,
+        {...project.tracks[0], id: 'track-3', title: 'Third', sourcePath: 'C:/Music/03.mp3', order: 2},
+        {...project.tracks[1], id: 'track-4', title: 'Fourth', sourcePath: 'C:/Music/04.mp3', order: 3},
+      ],
+    };
+
+    render(<PlaylistVideo project={fourTrackProject} />);
+
+    expect(screen.queryByText('NOW PLAYING · 01/04')).not.toBeNull();
+  });
+
+  it('centers the whole layout group in the canvas while keeping internal text alignment left', () => {
+    const css = readFileSync(themeCssPath, 'utf8');
+
+    expect(css).toMatch(/\.p2v-layout\{[^}]*left:50%/);
+    expect(css).toMatch(/\.p2v-layout\{[^}]*transform:translateX\(-50%\)/);
+    expect(css).toMatch(/\.p2v-layout\{[^}]*width:min\(calc\(100% - 9\.6%\),1680px\)/);
+    expect(css).toMatch(/\.p2v-layout\{[^}]*display:flex/);
+    expect(css).toMatch(/\.p2v-layout\{[^}]*justify-content:center/);
+    expect(css).toMatch(/\.p2v-copy\{[^}]*text-align:left/);
+    expect(css).toMatch(/\.p2v-playlist-panel\{[^}]*flex:0 0 520px/);
+    expect(css).not.toMatch(/\.p2v-layout\{[^}]*grid-template-columns/);
   });
 });

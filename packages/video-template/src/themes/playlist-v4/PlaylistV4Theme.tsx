@@ -8,6 +8,7 @@ import {SpectrumVisualizer} from './Waveform';
 import './theme.css';
 
 const fmt = (seconds: number) => `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`;
+const fmtCount = (value: number) => String(value).padStart(2, '0');
 
 export const PlaylistV4Theme: React.FC<PlaylistVideoProps> = ({project}) => {
   const frame = useCurrentFrame();
@@ -42,7 +43,7 @@ export const PlaylistV4Theme: React.FC<PlaylistVideoProps> = ({project}) => {
             {coverSrc ? <Img className="p2v-cover" src={coverSrc} /> : <div className="p2v-cover" />}
           </div>
           <div className="p2v-copy">
-            <div className="p2v-kicker">NOW PLAYING · {String(index + 1).padStart(2, '0')} / {timeline.length}</div>
+            <div className="p2v-kicker">NOW PLAYING · {fmtCount(index + 1)}/{fmtCount(timeline.length)}</div>
             <h1>{currentTrack.title}</h1>
             <p>{currentTrack.artist}{currentTrack.album ? ` — ${currentTrack.album}` : ''}</p>
             <div className="p2v-progress">
