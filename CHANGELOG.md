@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.1] - 2026-06-15
+### Features
+- Added mouse drag-and-drop reordering for playlist tracks in the Web UI.
+- Added a manual Generate video button that refreshes the Remotion preview only when clicked.
+- Kept MP4 export as a separate Export MP4 action.
+
+### Design Rationale
+- Decoupled playlist editing from preview generation so large playlists can be reordered without repeatedly rebuilding the preview.
+- Preserved the existing export flow to avoid confusing preview generation with rendering an MP4 file to disk.
+
+### Notes & Caveats
+- Drag-and-drop saves the new order immediately to the current project, but the right-side preview remains unchanged until Generate video is clicked again.
 ## [0.1.0] - 2026-06-15
 ### Features
 - Added local Fastify API for scanning audio folders and storing project state.
@@ -27,3 +39,4 @@
 - FFmpeg must be installed and available on `PATH`.
 - Verified the FFmpeg/Remotion path with generated fixture audio and an MP4 export probe; Remotion render assets are served from the workspace `assets` directory instead of `file://` paths.
 - Online playlist import, lyrics, desktop packaging, and additional themes remain future extensions.
+

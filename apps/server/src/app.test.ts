@@ -26,4 +26,20 @@ describe('app', () => {
     expect(response.json().error.code).toBe('validation_error');
     await app.close();
   });
+  it('allows browser PATCH requests for playlist reordering', async () => {
+    const app = await buildApp(config);
+    const response = await app.inject({
+      method: 'OPTIONS',
+      url: '/api/v1/projects/current/reorder',
+      headers: {
+        origin: 'http://127.0.0.1:5173',
+        'access-control-request-method': 'PATCH',
+        'access-control-request-headers': 'content-type',
+      },
+    });
+
+    expect(response.statusCode).toBe(204);
+    expect(response.headers['access-control-allow-methods']).toContain('PATCH');
+    await app.close();
+  });
 });

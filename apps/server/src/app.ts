@@ -9,7 +9,7 @@ import {registerExportRoutes} from './modules/exports/export-routes';
 
 export async function buildApp(config: ServerConfig) {
   const app = Fastify({logger: true});
-  await app.register(cors, {origin: ['http://localhost:5173', 'http://127.0.0.1:5173']});
+  await app.register(cors, {origin: ['http://localhost:5173', 'http://127.0.0.1:5173'], methods: ['GET', 'HEAD', 'POST', 'PATCH']});
   app.get('/api/v1/health', async () => data({ok: true}));
   await registerProjectRoutes(app, config);
   await registerExportRoutes(app, config);
@@ -21,4 +21,5 @@ export async function buildApp(config: ServerConfig) {
   });
   return app;
 }
+
 
