@@ -3,9 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "dev": "npm-run-all --parallel dev:server dev:web",
+    "dev": "cross-env FORCE_COLOR=1 npm-run-all --print-label --parallel dev:server dev:web",
     "dev:server": "npm --workspace apps/server run dev",
     "dev:web": "npm --workspace apps/web run dev",
     "build": "npm run build --workspaces",
@@ -24,6 +27,7 @@
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "@vitejs/plugin-react": "latest",
+    "cross-env": "^10.1.0",
     "jsdom": "latest",
     "npm-run-all": "latest",
     "prettier": "latest",

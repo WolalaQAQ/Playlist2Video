@@ -21,6 +21,12 @@ npm run dev
 
 打开 `http://127.0.0.1:5173`。
 
+开发终端输出已经做了可读性优化。后端日志使用对齐的 `INFO`、`WARN`、`ERROR`
+标签和彩色输出，`npm run dev` 会为并行运行的 `dev:server` 和 `dev:web`
+输出加前缀。交互式终端默认使用 Nerd Font 图标；如果你的终端字体无法显示，
+可以设置 `PLAYLIST2VIDEO_LOG_ICONS=ascii`。支持的值包括 `auto`、`nerd`、
+`ascii` 和 `none`。
+
 ## 使用流程
 
 1. 输入包含 `.mp3`、`.flac`、`.wav`、`.m4a`、`.aac` 或 `.ogg` 的本地文件夹路径。

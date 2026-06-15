@@ -21,6 +21,12 @@ npm run dev
 
 Open `http://127.0.0.1:5173`.
 
+Development terminal output is formatted for readability. Server logs use aligned
+`INFO`, `WARN`, and `ERROR` labels with color, and `npm run dev` labels the
+parallel `dev:server` and `dev:web` streams. Interactive terminals use Nerd Font
+icons by default; set `PLAYLIST2VIDEO_LOG_ICONS=ascii` if your terminal font
+cannot display them. Supported values are `auto`, `nerd`, `ascii`, and `none`.
+
 ## Workflow
 
 1. Enter a local folder path containing `.mp3`, `.flac`, `.wav`, `.m4a`, `.aac`, or `.ogg`.
