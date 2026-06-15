@@ -1,6 +1,8 @@
 # Playlist2Video
 
-Playlist2Video is a local Web UI for turning a folder of audio files into a playlist video.
+Playlist2Video is a local Web UI for turning a folder of audio files into a Remotion-powered playlist video.
+
+It scans local audio folders, extracts metadata and artwork, lets you reorder tracks with mouse drag-and-drop, generates an in-browser preview on demand, and exports a 1080p MP4 when you are ready.
 
 ## Requirements
 
@@ -21,10 +23,13 @@ Open `http://127.0.0.1:5173`.
 
 1. Enter a local folder path containing `.mp3`, `.flac`, `.wav`, `.m4a`, `.aac`, or `.ogg`.
 2. Click **Scan folder**.
-3. Review title, artist, duration, and cover status.
-4. Preview the `playlist-v4` theme.
-5. Click **Export MP4**.
-6. Find the exported file under `output/`.
+3. Review and edit title, artist, duration, and cover status.
+4. Drag the handle on the left of each track to adjust playlist order.
+5. Click **Generate video** to refresh the right-side Remotion preview when you are ready.
+6. Click **Export MP4** to render the final file.
+7. Find the exported file under `output/`.
+
+Scanning and reordering do not automatically regenerate the preview. This keeps large playlists responsive while you adjust the order.
 
 ## MVP Theme
 
