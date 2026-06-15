@@ -141,6 +141,38 @@ describe('PlaylistVideo', () => {
     expect(screen.queryByText('NOW PLAYING · 01/04')).not.toBeNull();
   });
 
+  it('applies adaptive sizing without replacing long current track titles with ellipses', () => {
+    const longTitleProject: Project = {
+      ...project,
+      tracks: [
+        {
+          ...project.tracks[0],
+          title: 'This Is a Very Long Song Title That Should Not Dominate the Whole Video Canvas',
+        },
+      ],
+    };
+
+    render(<PlaylistVideo project={longTitleProject} />);
+
+    const title = screen.getByRole('heading', {level: 1});
+    expect(Number.parseFloat(title.style.fontSize)).toBeLessThan(92);
+
+    const css = readFileSync(themeCssPath, 'utf8');
+    expect(css).toMatch(/\.p2v-copy h1\{[^}]*overflow:visible/);
+    expect(css).not.toMatch(/\.p2v-copy h1\{[^}]*max-height/);
+    expect(css).not.toMatch(/\.p2v-copy h1\{[^}]*-webkit-line-clamp/);
+    expect(css).not.toMatch(/\.p2v-copy h1\{[^}]*text-overflow:ellipsis/);
+  });
+
+  it('lets over-four-line titles reserve natural layout space instead of overlapping the artist', () => {
+    const css = readFileSync(themeCssPath, 'utf8');
+
+    expect(css).toMatch(/\.p2v-copy h1\{[^}]*overflow:visible/);
+    expect(css).not.toMatch(/\.p2v-copy h1\{[^}]*max-height/);
+    expect(css).not.toMatch(/\.p2v-copy h1\{[^}]*position:absolute/);
+    expect(css).toMatch(/\.p2v-copy p\{[^}]*margin:22px 0 0/);
+  });
+
   it('centers the whole layout group in the canvas while keeping internal text alignment left', () => {
     const css = readFileSync(themeCssPath, 'utf8');
 

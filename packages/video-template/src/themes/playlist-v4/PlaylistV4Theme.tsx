@@ -5,6 +5,7 @@ import type {PlaylistVideoProps} from '../../PlaylistVideo';
 import {BeatEffects} from './BeatEffects';
 import {PlaylistPanel} from './PlaylistPanel';
 import {SpectrumVisualizer} from './Waveform';
+import {getTrackTitleFontSize} from './titleSizing';
 import './theme.css';
 
 const fmt = (seconds: number) => `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`;
@@ -44,7 +45,7 @@ export const PlaylistV4Theme: React.FC<PlaylistVideoProps> = ({project}) => {
           </div>
           <div className="p2v-copy">
             <div className="p2v-kicker">NOW PLAYING · {fmtCount(index + 1)}/{fmtCount(timeline.length)}</div>
-            <h1>{currentTrack.title}</h1>
+            <h1 style={{fontSize: getTrackTitleFontSize(currentTrack.title)}}>{currentTrack.title}</h1>
             <p>{currentTrack.artist}{currentTrack.album ? ` — ${currentTrack.album}` : ''}</p>
             <div className="p2v-progress">
               <div className="p2v-time-row"><span>{fmt(localTime)}</span><span>{fmt(currentTrack.durationSeconds)}</span></div>

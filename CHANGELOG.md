@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.2] - 2026-06-15
+### Features
+- Added adaptive current-track title sizing in the playlist video theme.
+- Relaxed the current-track title layout with a smaller minimum font size.
+
+### Design Rationale
+- Used deterministic title-length estimation instead of DOM measurement so browser preview and Remotion export stay consistent.
+- Preserved the existing large title treatment for short names while shrinking only longer titles.
+- Avoided ellipsis/clamp replacement so complete song names remain visible.
+- Let very long titles reserve their natural layout height so they do not visually overlap the artist metadata below.
+
+### Notes & Caveats
+- Extremely long titles may exceed four lines at the minimum font size; in that case the theme shows the full title in the normal layout flow instead of clipping or replacing it with an ellipsis.
+
 ## [0.1.1] - 2026-06-15
 ### Features
 - Added mouse drag-and-drop reordering for playlist tracks in the Web UI.
