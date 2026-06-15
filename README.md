@@ -27,11 +27,23 @@ Open `http://127.0.0.1:5173`.
 2. Click **Scan folder**.
 3. Review and edit title, artist, duration, and cover status.
 4. Drag the handle on the left of each track to adjust playlist order.
-5. Click **Generate video** to refresh the right-side Remotion preview when you are ready.
-6. Click **Export MP4** to render the final file.
-7. Find the exported file under `output/`.
+5. Tune the **Parameter controls** panel for visual effects and export settings.
+6. Click **Generate video** to refresh the right-side Remotion preview when you are ready.
+7. Click **Export MP4** to render the final file.
+8. Find the exported file under `output/`.
 
-Scanning and reordering do not automatically regenerate the preview. This keeps large playlists responsive while you adjust the order.
+Scanning, reordering, and parameter edits do not automatically regenerate the preview. This keeps large playlists responsive while you adjust the project.
+
+## Parameter Controls
+
+The Web UI includes a persistent right-side panel for settings saved to the current project:
+
+- Visual effect intensity: low, medium, or high.
+- Particle and pulse-ring effect toggles.
+- Export width, height, FPS, codec display, and output file name.
+- FFmpeg audio export settings: codec display, bitrate, sample rate, channels, and volume.
+
+After changing parameters, click **Generate video** to rebuild the browser preview with the saved settings.
 
 ## MVP Theme
 

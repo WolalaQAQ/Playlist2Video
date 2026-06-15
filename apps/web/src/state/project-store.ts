@@ -1,5 +1,5 @@
 import {useCallback, useState} from 'react';
-import type {Project} from '@playlist2video/shared';
+import type {ExportConfig, Project, ThemeConfig} from '@playlist2video/shared';
 import * as client from '../api/client';
 
 export function useProjectStore() {
@@ -36,5 +36,11 @@ export function useProjectStore() {
     return updatedProject;
   }, []);
 
-  return {project, warnings, error, loading, scan, reorder, updateTrack};
+  const updateSettings = useCallback(async (input: {theme?: Partial<ThemeConfig>; exportConfig?: Partial<ExportConfig>}) => {
+    const updatedProject = await client.updateProjectSettings(input);
+    setProject(updatedProject);
+    return updatedProject;
+  }, []);
+
+  return {project, warnings, error, loading, scan, reorder, updateTrack, updateSettings};
 }

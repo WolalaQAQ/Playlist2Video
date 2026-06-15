@@ -38,6 +38,11 @@ export const ExportConfigSchema = z.object({
   fps: z.number().int().positive().default(30),
   videoCodec: z.literal('h264').default('h264'),
   outputFileName: z.string().min(1).default('playlist-video.mp4'),
+  audioCodec: z.literal('aac').default('aac'),
+  audioBitrateKbps: z.number().int().positive().default(320),
+  audioSampleRate: z.union([z.literal(44100), z.literal(48000)]).default(48000),
+  audioChannels: z.union([z.literal(1), z.literal(2)]).default(2),
+  audioVolumePercent: z.number().int().min(1).max(200).default(100),
 });
 
 export const ProjectSchema = z.object({
@@ -57,3 +62,4 @@ export type ThemeConfig = z.infer<typeof ThemeConfigSchema>;
 export type ExportConfig = z.infer<typeof ExportConfigSchema>;
 export type Project = z.infer<typeof ProjectSchema>;
 export type SupportedAudioExtension = (typeof supportedAudioExtensions)[number];
+

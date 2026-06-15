@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type {FastifyInstance} from 'fastify';
-import {defaultThemeConfig, ExportConfigSchema} from '@playlist2video/shared';
+import {defaultThemeConfig, ExportConfigSchema, ThemeConfigSchema} from '@playlist2video/shared';
 import {z} from 'zod';
 import type {ServerConfig} from '../../config';
 import {data} from '../../lib/api-response';
@@ -14,6 +14,10 @@ import {ProjectStore} from './project-store';
 const scanRequestSchema = z.object({folderPath: z.string().min(1)});
 const reorderRequestSchema = z.object({trackIds: z.array(z.string().min(1))});
 const updateTrackSchema = z.object({trackId: z.string().min(1), title: z.string().min(1).max(200), artist: z.string().min(1).max(200)});
+const updateSettingsSchema = z.object({
+  theme: ThemeConfigSchema.partial().optional(),
+  exportConfig: ExportConfigSchema.partial().optional(),
+});
 const mediaParamsSchema = z.object({trackId: z.string().min(1), kind: z.enum(['audio', 'cover'])});
 
 const contentTypes: Record<string, string> = {
@@ -118,5 +122,13 @@ export async function registerProjectRoutes(app: FastifyInstance, config: Server
     const project = await store.load();
     const tracks = project.tracks.map((track) => track.id === body.trackId ? {...track, title: body.title, artist: body.artist} : track);
     return data(hydrateProjectMediaUrls(await store.save({...project, tracks})));
+  });
+
+  app.patch('/api/v1/projects/current/settings', async (request) => {
+    const body = updateSettingsSchema.parse(request.body);
+    const project = await store.load();
+    const theme = ThemeConfigSchema.parse({...project.theme, ...body.theme});
+    const exportConfig = ExportConfigSchema.parse({...project.exportConfig, ...body.exportConfig});
+    return data(hydrateProjectMediaUrls(await store.save({...project, theme, exportConfig})));
   });
 }

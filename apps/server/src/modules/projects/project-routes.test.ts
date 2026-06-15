@@ -29,7 +29,18 @@ async function setupProject() {
       order: 0,
     }],
     theme: defaultThemeConfig,
-    exportConfig: {width: 1920, height: 1080, fps: 30, videoCodec: 'h264', outputFileName: 'playlist-video.mp4'},
+    exportConfig: {
+      width: 1920,
+      height: 1080,
+      fps: 30,
+      videoCodec: 'h264',
+      outputFileName: 'playlist-video.mp4',
+      audioCodec: 'aac',
+      audioBitrateKbps: 320,
+      audioSampleRate: 48000,
+      audioChannels: 2,
+      audioVolumePercent: 100,
+    },
   });
   const config: ServerConfig = {host: '127.0.0.1', port: 0, workspaceDir: root, assetsDir: path.join(root, 'assets'), outputDir: path.join(root, 'output')};
   return {root, project, config};
@@ -84,3 +95,82 @@ describe('project routes media preview', () => {
     await app.close();
   });
 });
+
+describe('project settings route', () => {
+  it('saves theme and export settings on the current project', async () => {
+    const {config} = await setupProject();
+    const app = await buildApp(config);
+
+    const response = await app.inject({
+      method: 'PATCH',
+      url: '/api/v1/projects/current/settings',
+      payload: {
+        theme: {effectIntensity: 'medium', showParticles: false, showPulseRings: false},
+        exportConfig: {
+          width: 1280,
+          height: 720,
+          fps: 24,
+          outputFileName: 'custom-playlist.mp4',
+          audioBitrateKbps: 256,
+          audioSampleRate: 44100,
+          audioChannels: 1,
+          audioVolumePercent: 85,
+        },
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.theme).toMatchObject({
+      themeId: 'playlist-v4',
+      effectIntensity: 'medium',
+      showParticles: false,
+      showPulseRings: false,
+      playlistPanelMode: 'full',
+    });
+    expect(response.json().data.exportConfig).toEqual({
+      width: 1280,
+      height: 720,
+      fps: 24,
+      videoCodec: 'h264',
+      outputFileName: 'custom-playlist.mp4',
+      audioCodec: 'aac',
+      audioBitrateKbps: 256,
+      audioSampleRate: 44100,
+      audioChannels: 1,
+      audioVolumePercent: 85,
+    });
+
+    const persisted = await new ProjectStore(config.workspaceDir).load();
+    expect(persisted.theme.effectIntensity).toBe('medium');
+    expect(persisted.theme.showParticles).toBe(false);
+    expect(persisted.theme.showPulseRings).toBe(false);
+    expect(persisted.exportConfig.width).toBe(1280);
+    expect(persisted.exportConfig.height).toBe(720);
+    expect(persisted.exportConfig.fps).toBe(24);
+    expect(persisted.exportConfig.outputFileName).toBe('custom-playlist.mp4');
+    expect(persisted.exportConfig.audioBitrateKbps).toBe(256);
+    expect(persisted.exportConfig.audioSampleRate).toBe(44100);
+    expect(persisted.exportConfig.audioChannels).toBe(1);
+    expect(persisted.exportConfig.audioVolumePercent).toBe(85);
+    await app.close();
+  });
+
+  it('rejects invalid theme and export settings', async () => {
+    const {config} = await setupProject();
+    const app = await buildApp(config);
+
+    const response = await app.inject({
+      method: 'PATCH',
+      url: '/api/v1/projects/current/settings',
+      payload: {
+        theme: {effectIntensity: 'extreme'},
+        exportConfig: {width: 0, fps: 0, outputFileName: '', audioBitrateKbps: 0, audioSampleRate: 0, audioChannels: 0, audioVolumePercent: 0},
+      },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json().error.code).toBe('validation_error');
+    await app.close();
+  });
+});
+

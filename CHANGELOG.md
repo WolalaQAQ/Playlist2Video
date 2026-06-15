@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.1.5] - 2026-06-16
+### Features
+- Added a persistent Web UI parameter adjustment panel for the current project.
+- Added controls for visual effect intensity, particles, pulse rings, export resolution, FPS, codec display, and output file name.
+- Added FFmpeg audio export controls for audio codec display, bitrate, sample rate, channels, and volume.
+- Added `PATCH /api/v1/projects/current/settings` to persist theme and export settings.
+- Removed the hard-coded default output description from the export card.
+
+### Design Rationale
+- Kept the controls as a right-side card so users can tune parameters while watching the preview area.
+- Preserved the manual Generate video workflow: parameter edits save immediately but do not rebuild the Remotion preview until the user clicks Generate video.
+- Reused existing shared Zod schemas on the server so UI updates cannot persist unsupported theme/export values.
+- Kept audio codec fixed to AAC for MP4 compatibility while exposing the most useful FFmpeg audio knobs.
+
+### Notes & Caveats
+- The first panel version exposes settings already represented in project state. Some hard-coded visual constants, such as spectrum bar count and detailed layout dimensions, remain future advanced controls.
+
 ## [0.1.4] - 2026-06-16
 ### Features
 - Kept `README.md` as the English README and added a separate `README_zh.md` Chinese README with cross-file language links.

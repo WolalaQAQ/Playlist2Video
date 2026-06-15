@@ -37,14 +37,51 @@ export const translations = {
       emptyWithoutProject: '扫描文件夹以准备歌单。',
     },
     theme: {
-      title: '主题',
+      title: '参数调整',
       name: 'Playlist V4',
       description: 'YouTube 风格歌单布局，包含实时频谱和节拍联动效果。',
       selected: '已选择',
+      empty: '扫描文件夹后可调整参数。',
+      visualGroup: '视觉效果',
+      exportGroup: '导出设置',
+      audioGroup: '音频导出设置',
+      advancedGroup: '高级信息',
+      effectIntensity: '效果强度',
+      intensityOptions: {low: '低', medium: '中', high: '高'},
+      showParticles: '显示粒子',
+      showPulseRings: '显示脉冲环',
+      themeId: '主题 ID',
+      width: '宽度',
+      height: '高度',
+      fps: 'FPS',
+      videoCodec: '视频编码',
+      outputFileName: '输出文件名',
+      audioCodec: '音频编码',
+      audioBitrate: '音频码率',
+      audioSampleRate: '采样率',
+      audioChannels: '声道数',
+      audioVolume: '音量',
+      audioBitrateOptions: {
+        128: '128 kbps',
+        192: '192 kbps',
+        256: '256 kbps',
+        320: '320 kbps',
+      },
+      audioSampleRateOptions: {
+        44100: '44.1 kHz',
+        48000: '48 kHz',
+      },
+      audioChannelOptions: {
+        1: '单声道',
+        2: '立体声',
+      },
+      saveHint: '参数会保存到当前项目；点击“生成视频”刷新预览。',
+      saving: '保存中...',
+      saved: '已保存',
+      saveFailed: '保存失败',
     },
     exportPanel: {
       title: '导出',
-      description: '默认输出：1920x1080、30fps、MP4。',
       button: '导出 MP4',
       exportingButton: '导出中...',
       exportedTo: (outputPath: string) => `已导出到 ${outputPath}`,
@@ -85,14 +122,51 @@ export const translations = {
       emptyWithoutProject: 'Scan a folder to prepare a playlist.',
     },
     theme: {
-      title: 'Theme',
+      title: 'Parameter controls',
       name: 'Playlist V4',
       description: 'YouTube-style playlist layout with realtime spectrum and beat-reactive effects.',
       selected: 'Selected',
+      empty: 'Scan a folder to enable parameter controls.',
+      visualGroup: 'Visual effects',
+      exportGroup: 'Export settings',
+      audioGroup: 'Audio export settings',
+      advancedGroup: 'Advanced info',
+      effectIntensity: 'Effect intensity',
+      intensityOptions: {low: 'Low', medium: 'Medium', high: 'High'},
+      showParticles: 'Show particles',
+      showPulseRings: 'Show pulse rings',
+      themeId: 'Theme ID',
+      width: 'Width',
+      height: 'Height',
+      fps: 'FPS',
+      videoCodec: 'Video codec',
+      outputFileName: 'Output file name',
+      audioCodec: 'Audio codec',
+      audioBitrate: 'Audio bitrate',
+      audioSampleRate: 'Sample rate',
+      audioChannels: 'Channels',
+      audioVolume: 'Volume',
+      audioBitrateOptions: {
+        128: '128 kbps',
+        192: '192 kbps',
+        256: '256 kbps',
+        320: '320 kbps',
+      },
+      audioSampleRateOptions: {
+        44100: '44.1 kHz',
+        48000: '48 kHz',
+      },
+      audioChannelOptions: {
+        1: 'Mono',
+        2: 'Stereo',
+      },
+      saveHint: 'Settings are saved to the current project. Click Generate video to refresh the preview.',
+      saving: 'Saving...',
+      saved: 'Saved',
+      saveFailed: 'Save failed',
     },
     exportPanel: {
       title: 'Export',
-      description: 'Default output: 1920x1080, 30fps, MP4.',
       button: 'Export MP4',
       exportingButton: 'Exporting...',
       exportedTo: (outputPath: string) => `Exported to ${outputPath}`,
@@ -137,10 +211,36 @@ export const translations = {
     name: string;
     description: string;
     selected: string;
+    empty: string;
+    visualGroup: string;
+    exportGroup: string;
+    audioGroup: string;
+    advancedGroup: string;
+    effectIntensity: string;
+    intensityOptions: {low: string; medium: string; high: string};
+    showParticles: string;
+    showPulseRings: string;
+    themeId: string;
+    width: string;
+    height: string;
+    fps: string;
+    videoCodec: string;
+    outputFileName: string;
+    audioCodec: string;
+    audioBitrate: string;
+    audioSampleRate: string;
+    audioChannels: string;
+    audioVolume: string;
+    audioBitrateOptions: Record<128 | 192 | 256 | 320, string>;
+    audioSampleRateOptions: Record<44100 | 48000, string>;
+    audioChannelOptions: Record<1 | 2, string>;
+    saveHint: string;
+    saving: string;
+    saved: string;
+    saveFailed: string;
   };
   exportPanel: {
     title: string;
-    description: string;
     button: string;
     exportingButton: string;
     exportedTo: (outputPath: string) => string;

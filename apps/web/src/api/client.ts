@@ -1,4 +1,4 @@
-import type {Project} from '@playlist2video/shared';
+import type {ExportConfig, Project, ThemeConfig} from '@playlist2video/shared';
 const apiBase = 'http://127.0.0.1:4317/api/v1';
 interface ApiSuccess<T> { data: T }
 
@@ -13,4 +13,6 @@ export const scanFolder = (folderPath: string) => request<{project: Project; war
 export const getCurrentProject = () => request<Project>('/projects/current');
 export const reorderTracks = (trackIds: string[]) => request<Project>('/projects/current/reorder', {method: 'PATCH', body: JSON.stringify({trackIds})});
 export const updateTrackMetadata = (input: {trackId: string; title: string; artist: string}) => request<Project>('/projects/current/tracks', {method: 'PATCH', body: JSON.stringify(input)});
+export const updateProjectSettings = (input: {theme?: Partial<ThemeConfig>; exportConfig?: Partial<ExportConfig>}) =>
+  request<Project>('/projects/current/settings', {method: 'PATCH', body: JSON.stringify(input)});
 export const exportCurrentProject = () => request<{outputPath: string}>('/exports', {method: 'POST'});

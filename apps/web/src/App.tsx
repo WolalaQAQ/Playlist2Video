@@ -74,7 +74,7 @@ export const App: React.FC = () => {
             <button disabled={!store.project} onClick={handleGenerateVideo}>{copy.generate.button}</button>
           </section>
           <VideoPreview copy={copy.preview} project={previewProject} hasEditableProject={Boolean(store.project)} />
-          <ThemePanel copy={copy.theme} />
+          <ThemePanel copy={copy.theme} project={store.project} onUpdateSettings={store.updateSettings} />
           <ExportPanel copy={copy.exportPanel} project={store.project} />
         </div>
       </main>

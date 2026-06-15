@@ -20,6 +20,7 @@ vi.mock('./api/client', () => ({
   getCurrentProject: vi.fn(),
   reorderTracks: vi.fn(),
   updateTrackMetadata: vi.fn(),
+  updateProjectSettings: vi.fn(),
   exportCurrentProject: vi.fn(),
 }));
 
@@ -46,7 +47,18 @@ function projectWithTracks(tracks: Track[]): Project {
     sourceFolder: 'C:/Music',
     tracks,
     theme: {themeId: 'playlist-v4', effectIntensity: 'high', showParticles: true, showPulseRings: true, playlistPanelMode: 'full'},
-    exportConfig: {width: 1920, height: 1080, fps: 30, videoCodec: 'h264', outputFileName: 'playlist-video.mp4'},
+    exportConfig: {
+      width: 1920,
+      height: 1080,
+      fps: 30,
+      videoCodec: 'h264',
+      outputFileName: 'playlist-video.mp4',
+      audioCodec: 'aac',
+      audioBitrateKbps: 320,
+      audioSampleRate: 48000,
+      audioChannels: 2,
+      audioVolumePercent: 100,
+    },
     createdAt: new Date(0).toISOString(),
     updatedAt: new Date(0).toISOString(),
   };
@@ -75,6 +87,11 @@ describe('App preview generation', () => {
       ...scannedProject,
       tracks: scannedProject.tracks.map((track) => (track.id === trackId ? {...track, title, artist} : track)),
     }));
+    vi.mocked(client.updateProjectSettings).mockImplementation(async (settings) => ({
+      ...scannedProject,
+      theme: {...scannedProject.theme, ...settings.theme},
+      exportConfig: {...scannedProject.exportConfig, ...settings.exportConfig},
+    }));
     vi.mocked(client.exportCurrentProject).mockResolvedValue({outputPath: 'C:/out/playlist-video.mp4'});
   });
 
@@ -102,7 +119,7 @@ describe('App preview generation', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.type(screen.getByRole('textbox'), 'C:\\Music');
+    await user.type(screen.getByPlaceholderText('C:\\Users\\You\\Music\\Playlist'), 'C:\\Music');
     await user.click(screen.getByRole('button', {name: '扫描文件夹'}));
 
     expect(await screen.findByDisplayValue('Alpha')).toBeInTheDocument();
@@ -115,11 +132,19 @@ describe('App preview generation', () => {
     expect(client.exportCurrentProject).not.toHaveBeenCalled();
   });
 
+  it('does not show a hard-coded default export description', () => {
+    render(<App />);
+
+    expect(screen.getByRole('heading', {name: '导出'})).toBeInTheDocument();
+    expect(screen.queryByText('默认输出：1920x1080、30fps、MP4。')).not.toBeInTheDocument();
+    expect(screen.queryByText('Default output: 1920x1080, 30fps, MP4.')).not.toBeInTheDocument();
+  });
+
   it('keeps the generated preview unchanged while tracks are reordered, then refreshes it on Generate video', async () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.type(screen.getByRole('textbox'), 'C:\\Music');
+    await user.type(screen.getByPlaceholderText('C:\\Users\\You\\Music\\Playlist'), 'C:\\Music');
     await user.click(screen.getByRole('button', {name: '扫描文件夹'}));
     await screen.findByDisplayValue('Alpha');
     await user.click(screen.getByRole('button', {name: '生成视频'}));
@@ -137,7 +162,26 @@ describe('App preview generation', () => {
 
     expect(screen.getByTestId('remotion-player')).toHaveTextContent('Beta > Alpha');
   });
+
+  it('saves parameter changes without auto-refreshing the generated preview', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(screen.getByPlaceholderText('C:\\Users\\You\\Music\\Playlist'), 'C:\\Music');
+    await user.click(screen.getByRole('button', {name: '扫描文件夹'}));
+    await screen.findByDisplayValue('Alpha');
+    await user.click(screen.getByRole('button', {name: '生成视频'}));
+
+    expect(screen.getByTestId('remotion-player')).toHaveTextContent('Alpha > Beta');
+
+    await user.selectOptions(screen.getByLabelText('效果强度'), 'medium');
+
+    expect(client.updateProjectSettings).toHaveBeenCalledWith({theme: {effectIntensity: 'medium'}});
+    expect(screen.getByTestId('remotion-player')).toHaveTextContent('Alpha > Beta');
+  });
 });
+
+
 
 
 

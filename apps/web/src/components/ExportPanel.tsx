@@ -23,7 +23,6 @@ export const ExportPanel: React.FC<{copy: Translation['exportPanel']; project: P
   return (
     <section className="card">
       <h2>{copy.title}</h2>
-      <p>{copy.description}</p>
       <button disabled={!project || exporting} onClick={handleExport}>{exporting ? copy.exportingButton : copy.button}</button>
       {outputPath ? <p>{copy.exportedTo(outputPath)}</p> : null}
       {error ? <p className="inline-error">{error}</p> : null}
