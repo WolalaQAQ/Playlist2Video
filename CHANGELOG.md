@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.3] - 2026-06-16
+### Features
+- Linked playlist-v4 visual effects to the active track's real spectrum energy.
+- Added low/mid/high frequency energy mapping for cover glow, pulse rings, strobe, flash, and particle sparks.
+
+### Design Rationale
+- Used precomputed `spectrumFrames` so Web preview and Remotion export stay deterministic and visually aligned.
+- Mapped low frequencies to large pulse motion, mid frequencies to scene/strobe breathing, and high frequencies to spark-like details so energy changes read across the whole frame.
+- Kept theme intensity settings as multipliers to preserve existing low/medium/high controls.
+
+### Notes & Caveats
+- If a track has no extracted spectrum data, the theme uses a deterministic fallback frame so the preview remains animated.
+
 ## [0.1.2] - 2026-06-15
 ### Features
 - Added adaptive current-track title sizing in the playlist video theme.

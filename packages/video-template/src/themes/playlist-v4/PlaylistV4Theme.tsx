@@ -1,10 +1,11 @@
 import React from 'react';
-import {Audio, Img, interpolate, Sequence, staticFile, useCurrentFrame, useVideoConfig} from 'remotion';
+import {Audio, Img, Sequence, staticFile, useCurrentFrame, useVideoConfig} from 'remotion';
 import {buildTimeline, findTrackAtTime, getTotalDuration} from '@playlist2video/shared';
 import type {PlaylistVideoProps} from '../../PlaylistVideo';
 import {BeatEffects} from './BeatEffects';
 import {PlaylistPanel} from './PlaylistPanel';
 import {SpectrumVisualizer} from './Waveform';
+import {getSpectrumEnergyProfile} from './spectrumEnergy';
 import {getTrackTitleFontSize} from './titleSizing';
 import './theme.css';
 
@@ -21,7 +22,7 @@ export const PlaylistV4Theme: React.FC<PlaylistVideoProps> = ({project}) => {
   const index = currentTrack ? timeline.findIndex((track) => track.id === currentTrack.id) : 0;
   const localTime = currentTrack ? currentTime - currentTrack.startSeconds : 0;
   const progress = currentTrack ? Math.max(0, Math.min(1, localTime / currentTrack.durationSeconds)) : 0;
-  const energy = interpolate(Math.sin(frame / 5), [-1, 1], [0.15, 1]);
+  const energyProfile = getSpectrumEnergyProfile({spectrumFrames: currentTrack?.spectrumFrames, progress});
   const audioTracks = timeline.filter((track) => track.audioPreviewUrl);
 
   if (!currentTrack) return <div className="p2v-root p2v-empty">No tracks loaded</div>;
@@ -29,18 +30,29 @@ export const PlaylistV4Theme: React.FC<PlaylistVideoProps> = ({project}) => {
   const coverSrc = currentTrack.coverPreviewUrl ?? (currentTrack.renderCoverPath ? staticFile(currentTrack.renderCoverPath) : null);
 
   return (
-    <div className="p2v-root">
+    <div
+      className="p2v-root"
+      style={
+        {
+          '--effect-energy': energyProfile.overall.toFixed(3),
+          '--high-energy': energyProfile.high.toFixed(3),
+          '--low-energy': energyProfile.low.toFixed(3),
+          '--mid-energy': energyProfile.mid.toFixed(3),
+          '--peak-energy': energyProfile.peak.toFixed(3),
+        } as React.CSSProperties
+      }
+    >
       {audioTracks.map((track) => (
         <Sequence key={track.id} from={Math.round(track.startSeconds * fps)} durationInFrames={Math.ceil(track.durationSeconds * fps)}>
           <Audio src={track.audioPreviewUrl!} />
         </Sequence>
       ))}
       <div className="p2v-bg" />
-      <BeatEffects energy={energy} config={project.theme} />
+      <BeatEffects energyProfile={energyProfile} config={project.theme} />
       <main className="p2v-layout">
         <section className="p2v-now">
           <div className="p2v-cover-wrap">
-            <div className="p2v-cover-glow" style={{transform: `scale(${1 + energy * 0.06})`}} />
+            <div className="p2v-cover-glow" style={{transform: `scale(${1 + energyProfile.low * 0.11 + energyProfile.peak * 0.025})`}} />
             {coverSrc ? <Img className="p2v-cover" src={coverSrc} /> : <div className="p2v-cover" />}
           </div>
           <div className="p2v-copy">
@@ -55,7 +67,7 @@ export const PlaylistV4Theme: React.FC<PlaylistVideoProps> = ({project}) => {
         </section>
         <PlaylistPanel timeline={timeline} currentTrackId={currentTrack.id} totalDurationSeconds={totalDurationSeconds} />
       </main>
-      <SpectrumVisualizer spectrumFrames={currentTrack.spectrumFrames} progress={progress} energy={energy} />
+      <SpectrumVisualizer spectrumFrames={currentTrack.spectrumFrames} progress={progress} energy={energyProfile.overall} />
     </div>
   );
 };

@@ -72,6 +72,42 @@ const project: Project = {
   updatedAt: new Date(0).toISOString(),
 };
 
+function projectWithEffects(spectrumFrames: number[][]): Project {
+  return {
+    ...project,
+    tracks: [
+      {
+        ...project.tracks[0],
+        spectrumFrames,
+      },
+    ],
+    theme: {
+      ...project.theme,
+      effectIntensity: 'high',
+      showParticles: true,
+      showPulseRings: true,
+    },
+  };
+}
+
+function readEnergyVariables() {
+  const root = document.querySelector<HTMLElement>('.p2v-root');
+  expect(root).not.toBeNull();
+
+  return {
+    low: Number.parseFloat(root!.style.getPropertyValue('--low-energy')),
+    mid: Number.parseFloat(root!.style.getPropertyValue('--mid-energy')),
+    high: Number.parseFloat(root!.style.getPropertyValue('--high-energy')),
+    overall: Number.parseFloat(root!.style.getPropertyValue('--effect-energy')),
+  };
+}
+
+function cssRule(css: string, selector: string): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = css.match(new RegExp(`${escaped}\\{([^}]*)\\}`));
+  return match?.[1] ?? '';
+}
+
 describe('PlaylistVideo', () => {
   beforeEach(() => {
     remotionState.currentFrame = 0;
@@ -124,6 +160,44 @@ describe('PlaylistVideo', () => {
     expect(bars.every((bar) => bar.classList.contains('is-spectrum'))).toBe(true);
     expect(bars.some((bar) => bar.classList.contains('is-played'))).toBe(false);
     expect(bars.some((bar) => bar.classList.contains('is-playhead'))).toBe(false);
+  });
+
+  it('drives theme effect energy from the current spectrum frame instead of a synthetic pulse', () => {
+    const effectProject = projectWithEffects([
+      [1, 0.95, 0.85, 0.18, 0.1, 0.04, 0.02, 0.01],
+      [0.02, 0.03, 0.06, 0.18, 0.3, 0.65, 0.9, 1],
+    ]);
+
+    const {rerender} = render(<PlaylistVideo project={effectProject} />);
+    const initialEnergy = readEnergyVariables();
+    const lowRingTransform = document.querySelector<HTMLElement>('.p2v-ring-one')?.style.transform ?? '';
+
+    expect(initialEnergy.low).toBeGreaterThan(initialEnergy.high);
+    expect(initialEnergy.overall).toBeGreaterThan(0);
+    expect(lowRingTransform).toMatch(/scale\(/);
+
+    remotionState.currentFrame = 45;
+    rerender(<PlaylistVideo project={effectProject} />);
+    const laterEnergy = readEnergyVariables();
+
+    expect(laterEnergy.high).toBeGreaterThan(laterEnergy.low);
+  });
+
+  it('renders high-frequency particle sparks whose strength follows spectrum energy', () => {
+    render(
+      <PlaylistVideo
+        project={projectWithEffects([
+          [0.02, 0.03, 0.05, 0.1, 0.2, 0.74, 0.92, 1],
+        ])}
+      />,
+    );
+
+    const energy = readEnergyVariables();
+    const particles = Array.from(document.querySelectorAll<HTMLElement>('.p2v-particle'));
+
+    expect(energy.high).toBeGreaterThan(energy.low);
+    expect(particles).toHaveLength(18);
+    expect(particles.some((particle) => Number.parseFloat(particle.style.opacity) > 0.6)).toBe(true);
   });
 
   it('formats the now playing position with two-digit current and total counts', () => {
@@ -184,5 +258,16 @@ describe('PlaylistVideo', () => {
     expect(css).toMatch(/\.p2v-copy\{[^}]*text-align:left/);
     expect(css).toMatch(/\.p2v-playlist-panel\{[^}]*flex:0 0 520px/);
     expect(css).not.toMatch(/\.p2v-layout\{[^}]*grid-template-columns/);
+  });
+
+  it('keeps now-playing metadata and progress above beat effect overlays', () => {
+    const css = readFileSync(themeCssPath, 'utf8');
+
+    expect(cssRule(css, '.p2v-bg')).toMatch(/z-index:0/);
+    expect(cssRule(css, '.p2v-ring,.p2v-strobe,.p2v-flash,.p2v-particles')).toMatch(/z-index:1/);
+    expect(cssRule(css, '.p2v-layout')).toMatch(/z-index:3/);
+    expect(cssRule(css, '.p2v-now,.p2v-copy,.p2v-progress,.p2v-cover')).toMatch(/position:relative/);
+    expect(cssRule(css, '.p2v-now,.p2v-copy,.p2v-progress,.p2v-cover')).toMatch(/z-index:3/);
+    expect(cssRule(css, '.p2v-spectrum')).toMatch(/z-index:4/);
   });
 });

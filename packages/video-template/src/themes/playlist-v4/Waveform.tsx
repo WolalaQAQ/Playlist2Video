@@ -1,4 +1,5 @@
 import React from 'react';
+import {spectrumFrameAt} from './spectrumEnergy';
 
 const clamp = (value: number, min = 0, max = 1) => Math.max(min, Math.min(max, value));
 
@@ -11,18 +12,6 @@ function sampleBand(frame: number[], index: number): number {
   const right = Math.min(frame.length - 1, left + 1);
   const mix = safeIndex - left;
   return frame[left] * (1 - mix) + frame[right] * mix;
-}
-
-function spectrumFrameAt(spectrumFrames: number[][], progress: number): number[] {
-  if (spectrumFrames.length === 0) return [];
-  if (spectrumFrames.length === 1) return spectrumFrames[0];
-
-  const frameIndex = clamp(progress) * (spectrumFrames.length - 1);
-  const left = Math.floor(frameIndex);
-  const right = Math.min(spectrumFrames.length - 1, left + 1);
-  const mix = frameIndex - left;
-
-  return spectrumFrames[left].map((value, bandIndex) => value * (1 - mix) + (spectrumFrames[right][bandIndex] ?? 0) * mix);
 }
 
 function fallbackSpectrumFrame(bands: number, progress: number, energy: number): number[] {
