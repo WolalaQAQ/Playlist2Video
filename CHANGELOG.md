@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.1.7] - 2026-06-16
+
+### Features
+
+- Added live FFmpeg terminal output during export so audio concatenation and final video/audio export progress remain visible.
+- Added FFmpeg H.264 GPU encoder detection for `h264_nvenc`, `h264_qsv`, and `h264_amf`, including a usability probe before selecting an encoder.
+- Added automatic CPU fallback to `libx264` with an explicit terminal warning when no usable GPU encoder is available or when GPU export fails.
+- Enabled Remotion's safe hardware acceleration mode for its video render stage.
+
+### Fixes
+
+- Ignored embedded cover-art video streams while concatenating playlist audio so MP3 artwork is not encoded into the intermediate `.m4a`.
+- Stabilized Remotion export serving on Windows by using a per-export bundle directory, forcing the internal Remotion server to IPv4 loopback, and reusing one server for composition selection and rendering.
+- Disabled Remotion's parallel pre-encoding path for exports to avoid Windows FFmpeg pipe exits during long renders.
+- Bounded Remotion render concurrency to one browser worker for long 1080p exports to avoid Chromium target crashes around clustered frame retries.
+- Downsampled dense spectrum frame props before Remotion rendering so large real playlists do not push tens of megabytes of JSON through the headless browser startup path.
+
+### Design Rationale
+
+- Used inherited FFmpeg stdio plus `-stats` so users see native FFmpeg progress instead of waiting on a silent child process.
+- Probed detected hardware encoders instead of trusting `ffmpeg -encoders`, because listed encoders can still fail when drivers or devices are unavailable.
+- Kept fallback inside the export flow so a GPU/driver failure does not abort the whole export.
+- Mapped FFmpeg concat to the first audio stream and disabled video streams because many MP3 files expose embedded artwork as a video stream.
+- Reused a single Remotion static server for each export so the browser does not have to reconnect to a freshly-started `localhost:3000` server between metadata selection and frame rendering.
+- Chose sequential Remotion frame rendering plus a separate final FFmpeg GPU/CPU encode so one FFmpeg path handles final hardware acceleration while avoiding fragile image-pipe pre-encoding.
+- Limited Remotion browser concurrency after real-project evidence showed multiple adjacent frames crashing at once under the default multi-worker render behavior.
+- Kept enough spectrum frames for reactive visuals while bounding serialized render props; this preserves deterministic preview/export visuals without overloading Remotion page initialization.
+
+### Notes & Caveats
+
+- Final export re-encodes H.264 video when using GPU or CPU fallback, so encoder availability and output speed depend on the installed FFmpeg build and GPU driver.
+- If no supported GPU encoder can be initialized, the export automatically uses `libx264` and logs the fallback.
+- Full-length 1080p exports can still take several minutes; the API request remains open until rendering and muxing finish.
+
 ## [0.1.6] - 2026-06-16
 
 ### Features
