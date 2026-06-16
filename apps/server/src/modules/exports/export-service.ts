@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { bundle } from "@remotion/bundler";
@@ -9,6 +10,7 @@ import {
   selectComposition,
 } from "@remotion/renderer";
 import type {
+  FfmpegOverrideFn,
   LogLevel,
   RemotionServer,
   RenderMediaOptions,
@@ -19,14 +21,17 @@ import { execa, type Options as ExecaOptions } from "execa";
 import { resolveInside } from "../../lib/path-safety";
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
 
 export type H264HardwareEncoder = "h264_nvenc" | "h264_qsv" | "h264_amf";
 export type FinalVideoEncoder = H264HardwareEncoder | "libx264";
+export type H264EncoderPreference = FinalVideoEncoder | null;
 
 export interface DetectH264HardwareEncoderOptions {
   readEncoders?: () => Promise<string>;
   probeEncoder?: (candidate: H264HardwareEncoder) => Promise<boolean>;
   runProbe?: (command: string, args: string[]) => Promise<void>;
+  logWarn?: (message: string) => void;
 }
 
 export interface RunFinalFfmpegExportOptions {
@@ -38,6 +43,7 @@ export interface RunFinalFfmpegExportOptions {
   runFfmpeg?: (args: string[]) => Promise<void>;
   logInfo?: (message: string) => void;
   logWarn?: (message: string) => void;
+  forceNvenc?: boolean;
 }
 
 type RenderVideoOnlyForExport = (
@@ -78,6 +84,10 @@ export interface RenderProjectVideoOnlyOptions {
   renderMediaFn?: (
     options: RenderMediaOptions,
   ) => ReturnType<typeof renderMedia>;
+  detectHardwareEncoder?: () => Promise<H264HardwareEncoder | null>;
+  prepareForcedNvencBinariesDirectory?: (options: {
+    targetDir: string;
+  }) => Promise<string>;
 }
 
 const h264HardwareEncoderPriority: H264HardwareEncoder[] = [
@@ -212,6 +222,12 @@ export async function renderProjectVideoOnly(
     options.project.exportConfig.frameImageFormat ?? "jpeg";
   const jpegQuality = options.project.exportConfig.jpegQuality ?? 100;
   const remotionChromiumOptions = getRemotionChromiumOptionsFromEnv();
+  const remotionEncoderOptions = await resolveRemotionEncoderOptions({
+    detectHardwareEncoder: options.detectHardwareEncoder,
+    prepareForcedNvencBinariesDirectory:
+      options.prepareForcedNvencBinariesDirectory,
+    targetDir: path.join(options.tempDir, "remotion-nvenc-binaries"),
+  });
   const bundledServeUrl = await timeAsyncStep("Remotion bundle", () =>
     bundleRemotion({
       entryPoint: getRemotionEntryPoint(),
@@ -239,12 +255,25 @@ export async function renderProjectVideoOnly(
         codec: options.project.exportConfig.videoCodec,
         imageFormat: frameImageFormat,
         ...(frameImageFormat === "jpeg" ? { jpegQuality } : {}),
+        // Remotion 4.0.477's ESM renderer currently rejects
+        // `hardwareAcceleration: "required"` for H.264 on Windows before
+        // `ffmpegOverride` gets a chance to rewrite the encoder. Keep the
+        // renderer path enabled and make NVENC fail-fast through the forced
+        // `-c:v h264_nvenc` override instead of relying on Remotion's platform
+        // hardware-acceleration gate.
         hardwareAcceleration: "if-possible",
+        ...remotionEncoderOptions,
         ...(remotionChromiumOptions
           ? { chromiumOptions: remotionChromiumOptions }
           : {}),
         disallowParallelEncoding: false,
-        concurrency: 4,
+        concurrency: 16,
+        // Export audio is generated and volume-adjusted by the explicit FFmpeg
+        // audio concat step below, then muxed in the final export stage. Muting
+        // the Remotion render keeps this pass video-only and avoids Remotion's
+        // internal AAC preprocessing from constraining which FFmpeg build can be
+        // used for forced NVENC stitching.
+        muted: true,
         videoBitrate: `${options.project.exportConfig.videoBitrateKbps}k`,
         outputLocation: options.videoOnlyPath,
         inputProps: { project: renderProject },
@@ -267,6 +296,211 @@ export function prepareProjectForRemotionRender(project: Project): Project {
     ...project,
     tracks: project.tracks.map((track) => ({ ...track })),
   };
+}
+
+export function shouldForceNvenc(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const setting = env.PLAYLIST2VIDEO_FORCE_NVENC?.toLowerCase();
+  return setting === "1" || setting === "true" || setting === "on";
+}
+
+export function resolveH264EncoderPreference(
+  env: NodeJS.ProcessEnv = process.env,
+): H264EncoderPreference {
+  const setting = env.PLAYLIST2VIDEO_H264_ENCODER?.toLowerCase();
+  if (!setting) return null;
+
+  if (
+    setting === "h264_nvenc" ||
+    setting === "h264_qsv" ||
+    setting === "h264_amf" ||
+    setting === "libx264"
+  ) {
+    return setting;
+  }
+
+  throw new Error(
+    `Invalid PLAYLIST2VIDEO_H264_ENCODER value "${setting}". Expected one of: h264_nvenc, h264_qsv, h264_amf, libx264.`,
+  );
+}
+
+async function resolveRemotionEncoderOptions(options: {
+  detectHardwareEncoder?: () => Promise<H264HardwareEncoder | null>;
+  prepareForcedNvencBinariesDirectory?: (options: {
+    targetDir: string;
+  }) => Promise<string>;
+  targetDir: string;
+}): Promise<
+  Partial<Pick<RenderMediaOptions, "binariesDirectory" | "ffmpegOverride">>
+> {
+  const explicitEncoder = resolveH264EncoderPreference();
+
+  if (explicitEncoder) {
+    if (explicitEncoder === "h264_nvenc") {
+      return getForcedNvencRemotionOptions(
+        await (
+          options.prepareForcedNvencBinariesDirectory ??
+          prepareForcedNvencBinariesDirectory
+        )({
+          targetDir: options.targetDir,
+        }),
+      );
+    }
+
+    return {
+      ffmpegOverride: createForceH264EncoderFfmpegOverride(explicitEncoder),
+    };
+  }
+
+  const hardwareEncoder = shouldForceNvenc()
+    ? "h264_nvenc"
+    : await (
+        options.detectHardwareEncoder ??
+        (() => detectH264HardwareEncoder({ logWarn: console.warn }))
+      )();
+
+  if (hardwareEncoder !== "h264_nvenc") return {};
+
+  return getForcedNvencRemotionOptions(
+    await (
+      options.prepareForcedNvencBinariesDirectory ??
+      prepareForcedNvencBinariesDirectory
+    )({
+      targetDir: options.targetDir,
+    }),
+  );
+}
+
+export function forceH264EncoderFfmpegArgs(
+  args: string[],
+  encoder: FinalVideoEncoder,
+): string[] {
+  const nextArgs = [...args];
+  const videoCodecIndex = nextArgs.lastIndexOf("-c:v");
+
+  if (videoCodecIndex >= 0 && videoCodecIndex + 1 < nextArgs.length) {
+    nextArgs[videoCodecIndex + 1] = encoder;
+    return nextArgs;
+  }
+
+  const outputIndex = Math.max(nextArgs.length - 1, 0);
+  nextArgs.splice(outputIndex, 0, "-c:v", encoder);
+  return nextArgs;
+}
+
+export function forceNvencFfmpegArgs(args: string[]): string[] {
+  return forceH264EncoderFfmpegArgs(args, "h264_nvenc");
+}
+
+export function createForceH264EncoderFfmpegOverride(
+  encoder: FinalVideoEncoder,
+): FfmpegOverrideFn {
+  return ({ args }) => forceH264EncoderFfmpegArgs(args, encoder);
+}
+
+export function createForceNvencFfmpegOverride(): FfmpegOverrideFn {
+  return createForceH264EncoderFfmpegOverride("h264_nvenc");
+}
+
+function getForcedNvencRemotionOptions(
+  binariesDirectory: string,
+): Pick<RenderMediaOptions, "binariesDirectory" | "ffmpegOverride"> {
+  return {
+    binariesDirectory,
+    ffmpegOverride: createForceNvencFfmpegOverride(),
+  };
+}
+
+export async function prepareForcedNvencBinariesDirectory(options: {
+  targetDir: string;
+  remotionBinariesSourceDir?: string;
+  ffmpegPath?: string;
+  ffprobePath?: string;
+  resolveExecutablePath?: (
+    commandName: "ffmpeg" | "ffprobe",
+  ) => Promise<string>;
+}): Promise<string> {
+  const resolveExecutablePath =
+    options.resolveExecutablePath ?? resolveExecutableOnPath;
+  const sourceDir =
+    options.remotionBinariesSourceDir ?? getRemotionCompositorDir();
+  const ffmpegPath =
+    options.ffmpegPath ?? (await resolveExecutablePath("ffmpeg"));
+  const ffprobePath =
+    options.ffprobePath ?? (await resolveExecutablePath("ffprobe"));
+
+  await fs.rm(options.targetDir, { recursive: true, force: true });
+  await fs.mkdir(path.dirname(options.targetDir), { recursive: true });
+  await fs.cp(sourceDir, options.targetDir, { recursive: true });
+  await fs.copyFile(
+    ffmpegPath,
+    path.join(options.targetDir, getRemotionBinaryFileName("ffmpeg")),
+  );
+  await fs.copyFile(
+    ffprobePath,
+    path.join(options.targetDir, getRemotionBinaryFileName("ffprobe")),
+  );
+
+  return options.targetDir;
+}
+
+function getRemotionCompositorDir(): string {
+  const packageName = getRemotionCompositorPackageName();
+  const compositorPackage = require(packageName) as { dir?: unknown };
+  if (typeof compositorPackage.dir !== "string") {
+    throw new Error(
+      `Could not resolve Remotion compositor directory from ${packageName}.`,
+    );
+  }
+  return compositorPackage.dir;
+}
+
+function getRemotionCompositorPackageName(): string {
+  if (process.platform === "win32" && process.arch === "x64") {
+    return "@remotion/compositor-win32-x64-msvc";
+  }
+  if (process.platform === "darwin" && process.arch === "arm64") {
+    return "@remotion/compositor-darwin-arm64";
+  }
+  if (process.platform === "darwin" && process.arch === "x64") {
+    return "@remotion/compositor-darwin-x64";
+  }
+  if (process.platform === "linux" && process.arch === "x64") {
+    return "@remotion/compositor-linux-x64-gnu";
+  }
+  if (process.platform === "linux" && process.arch === "arm64") {
+    return "@remotion/compositor-linux-arm64-gnu";
+  }
+  throw new Error(
+    `Unsupported Remotion compositor platform: ${process.platform}-${process.arch}.`,
+  );
+}
+
+async function resolveExecutableOnPath(
+  commandName: "ffmpeg" | "ffprobe",
+): Promise<string> {
+  const locator = process.platform === "win32" ? "where.exe" : "which";
+  const result = await execa(locator, [commandName]);
+  const candidates = result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const nonRemotionCandidate =
+    candidates.find(
+      (candidate) =>
+        !candidate.toLowerCase().includes(`${path.sep}@remotion${path.sep}`),
+    ) ?? candidates[0];
+
+  if (!nonRemotionCandidate) {
+    throw new Error(`Could not find ${commandName} on PATH.`);
+  }
+
+  return nonRemotionCandidate;
+}
+
+function getRemotionBinaryFileName(commandName: "ffmpeg" | "ffprobe"): string {
+  return process.platform === "win32" ? `${commandName}.exe` : commandName;
 }
 
 export function buildAudioFfmpegArgs(
@@ -325,18 +559,29 @@ export async function detectH264HardwareEncoder(
     const probeEncoder =
       options.probeEncoder ??
       ((candidate: H264HardwareEncoder) =>
-        probeH264HardwareEncoder(candidate, options.runProbe));
+        probeH264HardwareEncoder(candidate, options.runProbe, options.logWarn));
     const encodersOutput = await readEncoders();
     const candidates = h264HardwareEncoderPriority.filter((encoder) =>
       ffmpegEncoderListIncludes(encodersOutput, encoder),
     );
 
+    const logWarn = options.logWarn;
+
     for (const candidate of candidates) {
-      if (await probeEncoder(candidate).catch(() => false)) return candidate;
+      const probePassed = await probeEncoder(candidate).catch((error) => {
+        logWarn?.(
+          `[FFmpeg] Hardware encoder probe for ${candidate} failed: ${formatProbeError(error)}`,
+        );
+        return false;
+      });
+      if (probePassed) return candidate;
     }
 
     return null;
-  } catch {
+  } catch (error) {
+    options.logWarn?.(
+      `[FFmpeg] Hardware encoder detection failed: ${formatProbeError(error)}`,
+    );
     return null;
   }
 }
@@ -349,6 +594,7 @@ async function readFfmpegEncoders(): Promise<string> {
 async function probeH264HardwareEncoder(
   encoder: H264HardwareEncoder,
   runProbe: (command: string, args: string[]) => Promise<void> = runFfmpegProbe,
+  logWarn?: (message: string) => void,
 ): Promise<boolean> {
   try {
     await runProbe("ffmpeg", [
@@ -369,13 +615,28 @@ async function probeH264HardwareEncoder(
       "-",
     ]);
     return true;
-  } catch {
+  } catch (error) {
+    logWarn?.(
+      `[FFmpeg] Hardware encoder probe for ${encoder} failed: ${formatProbeError(error)}`,
+    );
     return false;
   }
 }
 
 async function runFfmpegProbe(command: string, args: string[]): Promise<void> {
-  await execa(command, args, { stdout: "ignore", stderr: "ignore" });
+  try {
+    await execa(command, args, { stdout: "pipe", stderr: "pipe" });
+  } catch (error) {
+    throw new Error(formatProbeError(error));
+  }
+}
+
+function formatProbeError(error: unknown): string {
+  if (error instanceof Error) {
+    const stderr = "stderr" in error ? String(error.stderr ?? "").trim() : "";
+    return stderr ? `${error.message}\n${stderr}` : error.message;
+  }
+  return String(error);
 }
 
 export function buildFinalFfmpegArgs(options: {
@@ -449,20 +710,30 @@ export function getVisibleFfmpegOptions(): ExecaOptions {
 export async function runFinalFfmpegExport(
   options: RunFinalFfmpegExportOptions,
 ): Promise<void> {
-  const detectHardwareEncoder =
-    options.detectHardwareEncoder ?? detectH264HardwareEncoder;
   const runFfmpeg =
     options.runFfmpeg ??
     ((args: string[]) =>
       execa("ffmpeg", args, getVisibleFfmpegOptions()).then(() => undefined));
   const logInfo = options.logInfo ?? console.info;
   const logWarn = options.logWarn ?? console.warn;
+  const forceNvenc = options.forceNvenc ?? shouldForceNvenc();
+  const explicitEncoder = resolveH264EncoderPreference();
   const finalArgsBase = {
     videoPath: options.videoPath,
     audioPath: options.audioPath,
     outputPath: options.outputPath,
     videoBitrateKbps: options.videoBitrateKbps,
   };
+
+  if (forceNvenc) {
+    logInfo(
+      "[FFmpeg] Forcing final export through NVIDIA NVENC encoder h264_nvenc.",
+    );
+    await runFfmpeg(
+      buildFinalFfmpegArgs({ ...finalArgsBase, videoEncoder: "h264_nvenc" }),
+    );
+    return;
+  }
 
   logInfo("[FFmpeg] Attempting stream-copy final mux without re-encoding.");
   try {
@@ -474,7 +745,32 @@ export async function runFinalFfmpegExport(
     );
   }
 
-  const hardwareEncoder = await detectHardwareEncoder();
+  if (explicitEncoder) {
+    logInfo(
+      `[FFmpeg] Using environment-specified H.264 encoder ${explicitEncoder}.`,
+    );
+    try {
+      await runFfmpeg(
+        buildFinalFfmpegArgs({
+          ...finalArgsBase,
+          videoEncoder: explicitEncoder,
+        }),
+      );
+    } catch (error) {
+      if (explicitEncoder === "libx264") throw error;
+      logWarn(
+        `[FFmpeg] GPU encoder ${explicitEncoder} failed. Falling back to CPU encoder libx264.`,
+      );
+      await runFfmpeg(
+        buildFinalFfmpegArgs({ ...finalArgsBase, videoEncoder: "libx264" }),
+      );
+    }
+    return;
+  }
+
+  const hardwareEncoder = options.detectHardwareEncoder
+    ? await options.detectHardwareEncoder()
+    : await detectH264HardwareEncoder({ logWarn });
 
   if (!hardwareEncoder) {
     logWarn(

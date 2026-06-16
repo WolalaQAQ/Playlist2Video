@@ -1,3 +1,21 @@
+## [0.1.14] - 2026-06-17
+
+### Features
+
+- Made NVIDIA NVENC the default H.264 hardware encoder preference for Remotion stitching and the final FFmpeg re-encode path when the local FFmpeg probe confirms `h264_nvenc` is usable.
+- Added `PLAYLIST2VIDEO_H264_ENCODER` to explicitly override the H.264 encoder with `h264_nvenc`, `h264_qsv`, `h264_amf`, or `libx264`.
+
+### Design Rationale
+
+- NVENC is now preferred automatically, but export remains resilient: if hardware probing or encoding fails, the pipeline falls back to the existing CPU `libx264` path unless the legacy `PLAYLIST2VIDEO_FORCE_NVENC=1` fail-fast override is set.
+- Remotion `renderMedia` keeps Remotion's hardware-acceleration gate in compatible `if-possible` mode while `ffmpegOverride` rewrites `-c:v` to the selected encoder, because Remotion 4.0.477 rejects `hardwareAcceleration: required` for H.264 on Windows before the override can run.
+- The Remotion export pass is kept video-only (`muted: true`) because Playlist2Video already builds the final audio track with FFmpeg before muxing; this prevents Remotion's internal AAC preprocessing from constraining the FFmpeg build used for NVENC stitching.
+
+### Notes & Caveats
+
+- NVENC probing uses a 256x144 test source to avoid NVIDIA minimum-dimension false negatives and now keeps stderr in diagnostics.
+- The NVENC Remotion path builds a temporary binaries directory that keeps Remotion's compositor but replaces bundled FFmpeg/FFprobe with the system FFmpeg binaries found on `PATH`, since the bundled Remotion FFmpeg may not include `h264_nvenc`.
+
 ## [0.1.13] - 2026-06-17
 
 ### Features
