@@ -374,6 +374,48 @@ it("logs timing for export audio, video render, final mux, and cleanup steps", a
     ]),
   );
 });
+
+it("reports final export progress only after final mux completes", async () => {
+  const workspaceDir = await fs.mkdtemp(
+    path.join(process.cwd(), ".tmp-export-test-"),
+  );
+  const outputDir = path.join(workspaceDir, "output");
+  const project = createTestProject();
+  const events: string[] = [];
+
+  try {
+    await exportProject({
+      project,
+      outputDir,
+      workspaceDir,
+      onProgress: (progress) => events.push("progress:" + progress),
+      runFfmpeg: async (args) => {
+        const outputPath = args.at(-1);
+        if (outputPath) await fs.writeFile(outputPath, "");
+      },
+      renderVideoOnly: async ({ videoOnlyPath, onProgress }) => {
+        await fs.writeFile(videoOnlyPath, "");
+        onProgress?.(0.6);
+      },
+      finalFfmpegExport: async ({ outputPath }) => {
+        events.push("final-mux:start");
+        await fs.mkdir(path.dirname(outputPath), { recursive: true });
+        await fs.writeFile(outputPath, "");
+        events.push("final-mux:complete");
+      },
+    });
+  } finally {
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+  }
+
+  expect(events).toEqual([
+    "progress:0.2",
+    "progress:0.6",
+    "final-mux:start",
+    "final-mux:complete",
+    "progress:1",
+  ]);
+});
 it("cleans temporary export files by default after a successful export", async () => {
   const workspaceDir = await fs.mkdtemp(
     path.join(process.cwd(), ".tmp-export-test-"),
