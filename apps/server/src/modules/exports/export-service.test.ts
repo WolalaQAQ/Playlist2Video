@@ -16,6 +16,7 @@ import {
   runFinalFfmpegExport,
   startRemotionBundleServer,
   getOutputPath,
+  getRemotionChromiumOptionsFromEnv,
   getRemotionEntryPoint,
   getVisibleFfmpegOptions,
   selectH264HardwareEncoder,
@@ -96,6 +97,25 @@ it("starts a stable Remotion bundle server over IPv4 loopback and closes it", as
   expect(closedWith).toBe(true);
 });
 
+it("defaults Remotion GPU rendering to desktop ANGLE and rejects invalid GL backends", () => {
+  expect(
+    getRemotionChromiumOptionsFromEnv({ PLAYLIST2VIDEO_REMOTION_GPU: "1" }),
+  ).toEqual({ gl: "angle" });
+  expect(
+    getRemotionChromiumOptionsFromEnv({
+      PLAYLIST2VIDEO_REMOTION_GPU: "1",
+      PLAYLIST2VIDEO_REMOTION_GL: "angle-egl",
+    }),
+  ).toEqual({ gl: "angle-egl" });
+  expect(getRemotionChromiumOptionsFromEnv({})).toBeUndefined();
+  expect(() =>
+    getRemotionChromiumOptionsFromEnv({
+      PLAYLIST2VIDEO_REMOTION_GPU: "1",
+      PLAYLIST2VIDEO_REMOTION_GL: "not-real",
+    }),
+  ).toThrow(/Invalid PLAYLIST2VIDEO_REMOTION_GL/);
+});
+
 it("normalizes Remotion localhost serve URLs to IPv4 loopback", () => {
   expect(normalizeRemotionServeUrl("http://localhost:3000")).toBe(
     "http://127.0.0.1:3000/",
@@ -153,10 +173,10 @@ it("renders Remotion through one stable IPv4 bundle server", async () => {
       selectedServeUrls.push(options.serveUrl);
       return {
         id: "PlaylistVideo",
-      width: project.exportConfig.width,
-      height: project.exportConfig.height,
-      fps: project.exportConfig.fps,
-      durationInFrames: 30,
+        width: project.exportConfig.width,
+        height: project.exportConfig.height,
+        fps: project.exportConfig.fps,
+        durationInFrames: 30,
         props: {},
         defaultProps: {},
         defaultCodec: null,
@@ -198,6 +218,65 @@ it("renders Remotion through one stable IPv4 bundle server", async () => {
   expect(closed).toEqual([false]);
 });
 
+it("can enable Remotion Chromium GPU rendering with the desktop ANGLE backend", async () => {
+  const previousGpu = process.env.PLAYLIST2VIDEO_REMOTION_GPU;
+  const previousGl = process.env.PLAYLIST2VIDEO_REMOTION_GL;
+  process.env.PLAYLIST2VIDEO_REMOTION_GPU = "1";
+  process.env.PLAYLIST2VIDEO_REMOTION_GL = "angle";
+  const project = createTestProject();
+  let renderOptions: unknown = null;
+
+  try {
+    await renderProjectVideoOnly({
+      project,
+      workspaceDir: "C:/workspace",
+      tempDir: "C:/workspace/.tmp/export-123",
+      videoOnlyPath: "C:/workspace/.tmp/export-123/video.mp4",
+      bundleRemotion: async (options) => String(options.outDir),
+      startBundleServer: async () => ({
+        serveUrl: "http://127.0.0.1:3000/",
+        close: async () => undefined,
+      }),
+      selectCompositionFn: async () => ({
+        id: "PlaylistVideo",
+        width: project.exportConfig.width,
+        height: project.exportConfig.height,
+        fps: project.exportConfig.fps,
+        durationInFrames: 30,
+        props: {},
+        defaultProps: {},
+        defaultCodec: null,
+        defaultOutName: null,
+        defaultVideoImageFormat: null,
+        defaultPixelFormat: null,
+        defaultProResProfile: null,
+        defaultSampleRate: null,
+      }),
+      renderMediaFn: async (options) => {
+        renderOptions = options;
+        return { buffer: null, slowestFrames: [], contentType: "video/mp4" };
+      },
+    });
+  } finally {
+    if (previousGpu === undefined) {
+      delete process.env.PLAYLIST2VIDEO_REMOTION_GPU;
+    } else {
+      process.env.PLAYLIST2VIDEO_REMOTION_GPU = previousGpu;
+    }
+    if (previousGl === undefined) {
+      delete process.env.PLAYLIST2VIDEO_REMOTION_GL;
+    } else {
+      process.env.PLAYLIST2VIDEO_REMOTION_GL = previousGl;
+    }
+  }
+
+  expect(renderOptions).toMatchObject({
+    chromiumOptions: {
+      gl: "angle",
+    },
+  });
+  expect(renderOptions).not.toHaveProperty("chromeMode");
+});
 it("passes PNG intermediate frame settings to Remotion without JPEG quality", async () => {
   const project = createTestProject();
   project.exportConfig = {
@@ -243,7 +322,9 @@ it("passes PNG intermediate frame settings to Remotion without JPEG quality", as
 });
 
 it("cleans temporary export files by default after a successful export", async () => {
-  const workspaceDir = await fs.mkdtemp(path.join(process.cwd(), ".tmp-export-test-"));
+  const workspaceDir = await fs.mkdtemp(
+    path.join(process.cwd(), ".tmp-export-test-"),
+  );
   const outputDir = path.join(workspaceDir, "output");
   const project = createTestProject();
   const createdTempDirs: string[] = [];
@@ -256,22 +337,26 @@ it("cleans temporary export files by default after a successful export", async (
       const outputPath = args.at(-1);
       if (outputPath) await fs.writeFile(outputPath, "");
     },
-    renderVideoOnly: async ({tempDir, videoOnlyPath}) => {
+    renderVideoOnly: async ({ tempDir, videoOnlyPath }) => {
       createdTempDirs.push(tempDir);
       await fs.writeFile(videoOnlyPath, "");
     },
-    finalFfmpegExport: async ({outputPath}) => {
-      await fs.mkdir(path.dirname(outputPath), {recursive: true});
+    finalFfmpegExport: async ({ outputPath }) => {
+      await fs.mkdir(path.dirname(outputPath), { recursive: true });
       await fs.writeFile(outputPath, "");
     },
   });
 
-  await expect(fs.stat(createdTempDirs[0])).rejects.toMatchObject({code: "ENOENT"});
-  await fs.rm(workspaceDir, {recursive: true, force: true});
+  await expect(fs.stat(createdTempDirs[0])).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+  await fs.rm(workspaceDir, { recursive: true, force: true });
 });
 
 it("can preserve temporary export files for diagnostics", async () => {
-  const workspaceDir = await fs.mkdtemp(path.join(process.cwd(), ".tmp-export-test-"));
+  const workspaceDir = await fs.mkdtemp(
+    path.join(process.cwd(), ".tmp-export-test-"),
+  );
   const outputDir = path.join(workspaceDir, "output");
   const project = createTestProject();
   const createdTempDirs: string[] = [];
@@ -285,18 +370,18 @@ it("can preserve temporary export files for diagnostics", async () => {
       const outputPath = args.at(-1);
       if (outputPath) await fs.writeFile(outputPath, "");
     },
-    renderVideoOnly: async ({tempDir, videoOnlyPath}) => {
+    renderVideoOnly: async ({ tempDir, videoOnlyPath }) => {
       createdTempDirs.push(tempDir);
       await fs.writeFile(videoOnlyPath, "");
     },
-    finalFfmpegExport: async ({outputPath}) => {
-      await fs.mkdir(path.dirname(outputPath), {recursive: true});
+    finalFfmpegExport: async ({ outputPath }) => {
+      await fs.mkdir(path.dirname(outputPath), { recursive: true });
       await fs.writeFile(outputPath, "");
     },
   });
 
   await expect(fs.stat(createdTempDirs[0])).resolves.toBeTruthy();
-  await fs.rm(workspaceDir, {recursive: true, force: true});
+  await fs.rm(workspaceDir, { recursive: true, force: true });
 });
 
 it("maps only audio during FFmpeg concat so embedded MP3 cover art is not encoded as video", () => {
@@ -308,7 +393,7 @@ it("maps only audio during FFmpeg concat so embedded MP3 cover art is not encode
     videoBitrateKbps: 12000,
     spectrumFps: 30,
     renderQuality: "high",
-    frameImageFormat: 'jpeg',
+    frameImageFormat: "jpeg",
     jpegQuality: 100,
     outputFileName: "playlist-video.mp4",
     audioCodec: "aac",
@@ -340,7 +425,7 @@ it("builds FFmpeg audio concat arguments from export settings", () => {
     videoBitrateKbps: 12000,
     spectrumFps: 30,
     renderQuality: "high",
-    frameImageFormat: 'jpeg',
+    frameImageFormat: "jpeg",
     jpegQuality: 100,
     outputFileName: "playlist-video.mp4",
     audioCodec: "aac",
@@ -733,7 +818,7 @@ function createTestProject(): Project {
       videoBitrateKbps: 12000,
       spectrumFps: 30,
       renderQuality: "high",
-      frameImageFormat: 'jpeg',
+      frameImageFormat: "jpeg",
       jpegQuality: 100,
       outputFileName: "playlist-video.mp4",
       audioCodec: "aac",

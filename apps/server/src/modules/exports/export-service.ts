@@ -40,8 +40,12 @@ export interface RunFinalFfmpegExportOptions {
   logWarn?: (message: string) => void;
 }
 
-type RenderVideoOnlyForExport = (options: RenderProjectVideoOnlyOptions) => Promise<void>;
-type FinalFfmpegExportForExport = (options: RunFinalFfmpegExportOptions) => Promise<void>;
+type RenderVideoOnlyForExport = (
+  options: RenderProjectVideoOnlyOptions,
+) => Promise<void>;
+type FinalFfmpegExportForExport = (
+  options: RunFinalFfmpegExportOptions,
+) => Promise<void>;
 
 type PrepareRemotionServerOptions = Parameters<
   typeof RenderInternals.prepareServer
@@ -81,6 +85,35 @@ const h264HardwareEncoderPriority: H264HardwareEncoder[] = [
   "h264_qsv",
   "h264_amf",
 ];
+
+type RemotionChromiumOptions = NonNullable<
+  RenderMediaOptions["chromiumOptions"]
+>;
+type RemotionOpenGlRenderer = NonNullable<RemotionChromiumOptions["gl"]>;
+
+const validRemotionGlRenderers: RemotionOpenGlRenderer[] = [
+  "swangle",
+  "angle",
+  "egl",
+  "swiftshader",
+  "vulkan",
+  "angle-egl",
+];
+
+export function getRemotionChromiumOptionsFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): RemotionChromiumOptions | undefined {
+  if (env.PLAYLIST2VIDEO_REMOTION_GPU !== "1") return undefined;
+
+  const gl = env.PLAYLIST2VIDEO_REMOTION_GL ?? "angle";
+  if (!validRemotionGlRenderers.includes(gl as RemotionOpenGlRenderer)) {
+    throw new Error(
+      `Invalid PLAYLIST2VIDEO_REMOTION_GL value "${gl}". Expected one of: ${validRemotionGlRenderers.join(", ")}.`,
+    );
+  }
+
+  return { gl: gl as RemotionOpenGlRenderer };
+}
 
 export function escapeFfmpegConcatPath(filePath: string): string {
   return filePath.replaceAll("'", "'\\''");
@@ -155,6 +188,7 @@ export async function renderProjectVideoOnly(
   const frameImageFormat =
     options.project.exportConfig.frameImageFormat ?? "jpeg";
   const jpegQuality = options.project.exportConfig.jpegQuality ?? 100;
+  const remotionChromiumOptions = getRemotionChromiumOptionsFromEnv();
   const bundledServeUrl = await bundleRemotion({
     entryPoint: getRemotionEntryPoint(),
     outDir: bundleDir,
@@ -176,10 +210,11 @@ export async function renderProjectVideoOnly(
       serveUrl: server.serveUrl,
       codec: options.project.exportConfig.videoCodec,
       imageFormat: frameImageFormat,
-      ...(frameImageFormat === "jpeg"
-        ? { jpegQuality }
-        : {}),
+      ...(frameImageFormat === "jpeg" ? { jpegQuality } : {}),
       hardwareAcceleration: "if-possible",
+      ...(remotionChromiumOptions
+        ? { chromiumOptions: remotionChromiumOptions }
+        : {}),
       disallowParallelEncoding: false,
       concurrency: 4,
       videoBitrate: `${options.project.exportConfig.videoBitrateKbps}k`,
@@ -202,7 +237,7 @@ export async function renderProjectVideoOnly(
 export function prepareProjectForRemotionRender(project: Project): Project {
   return {
     ...project,
-    tracks: project.tracks.map((track) => ({...track})),
+    tracks: project.tracks.map((track) => ({ ...track })),
   };
 }
 
@@ -513,7 +548,7 @@ export async function exportProject(options: {
     return { outputPath };
   } finally {
     if (!options.keepTempFiles) {
-      await fs.rm(tempDir, {recursive: true, force: true});
+      await fs.rm(tempDir, { recursive: true, force: true });
     }
   }
 }
