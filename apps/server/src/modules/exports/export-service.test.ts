@@ -1,7 +1,7 @@
 import path from "node:path";
 import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { ExportConfig, Project } from "@playlist2video/shared";
 import {
   buildAudioFfmpegArgs,
@@ -277,6 +277,95 @@ it("can enable Remotion Chromium GPU rendering with the desktop ANGLE backend", 
   });
   expect(renderOptions).not.toHaveProperty("chromeMode");
 });
+
+it("passes Remotion render progress through without export-stage remapping", async () => {
+  const project = createTestProject();
+  const progressUpdates: number[] = [];
+  const stdoutWrite = vi
+    .spyOn(process.stdout, "write")
+    .mockImplementation(() => true);
+  const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+  let stdoutCalls: unknown[][] = [];
+  let timingMessages: string[] = [];
+
+  try {
+    await renderProjectVideoOnly({
+      project,
+      workspaceDir: "C:/workspace",
+      tempDir: "C:/workspace/.tmp/export-123",
+      videoOnlyPath: "C:/workspace/.tmp/export-123/video.mp4",
+      onProgress: (progress) => progressUpdates.push(progress),
+      bundleRemotion: async (options) => String(options.outDir),
+      startBundleServer: async () => ({
+        serveUrl: "http://127.0.0.1:3000/",
+        close: async () => undefined,
+      }),
+      selectCompositionFn: async () => ({
+        id: "PlaylistVideo",
+        width: project.exportConfig.width,
+        height: project.exportConfig.height,
+        fps: project.exportConfig.fps,
+        durationInFrames: 30,
+        props: {},
+        defaultProps: {},
+        defaultCodec: null,
+        defaultOutName: null,
+        defaultVideoImageFormat: null,
+        defaultPixelFormat: null,
+        defaultProResProfile: null,
+        defaultSampleRate: null,
+      }),
+      renderMediaFn: async (options) => {
+        options.onProgress?.({
+          renderedFrames: 15,
+          encodedFrames: 15,
+          encodedDoneIn: null,
+          renderedDoneIn: null,
+          renderEstimatedTime: 1,
+          progress: 0.5,
+          stitchStage: "encoding",
+        });
+        options.onProgress?.({
+          renderedFrames: 30,
+          encodedFrames: 30,
+          encodedDoneIn: 1,
+          renderedDoneIn: 1,
+          renderEstimatedTime: 0,
+          progress: 1,
+          stitchStage: "encoding",
+        });
+        return { buffer: null, slowestFrames: [], contentType: "video/mp4" };
+      },
+    });
+    stdoutCalls = [...stdoutWrite.mock.calls];
+    timingMessages = info.mock.calls.map(([message]) => String(message));
+  } finally {
+    stdoutWrite.mockRestore();
+    info.mockRestore();
+  }
+
+  expect(progressUpdates).toEqual([0.5, 1]);
+  expect(stdoutCalls).toEqual(
+    expect.arrayContaining([
+      [expect.stringContaining("[Remotion] Rendering video 50.0%")],
+    ]),
+  );
+  expect(timingMessages).toEqual(
+    expect.arrayContaining([
+      expect.stringMatching(
+        /^\[Timing\] Remotion bundle completed in \d+\.\d{2}s$/,
+      ),
+      expect.stringMatching(
+        /^\[Timing\] Remotion select composition completed in \d+\.\d{2}s$/,
+      ),
+      expect.stringMatching(
+        /^\[Timing\] Remotion render video completed in \d+\.\d{2}s$/,
+      ),
+    ]),
+  );
+});
+
 it("passes PNG intermediate frame settings to Remotion without JPEG quality", async () => {
   const project = createTestProject();
   project.exportConfig = {
@@ -319,6 +408,94 @@ it("passes PNG intermediate frame settings to Remotion without JPEG quality", as
 
   expect(renderOptions).toMatchObject({ imageFormat: "png" });
   expect(renderOptions).not.toHaveProperty("jpegQuality");
+});
+
+it("logs timing for export audio, video render, final mux, and cleanup steps", async () => {
+  const workspaceDir = await fs.mkdtemp(
+    path.join(process.cwd(), ".tmp-export-test-"),
+  );
+  const outputDir = path.join(workspaceDir, "output");
+  const project = createTestProject();
+  const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+  let messages: string[] = [];
+
+  try {
+    await exportProject({
+      project,
+      outputDir,
+      workspaceDir,
+      runFfmpeg: async (args) => {
+        const outputPath = args.at(-1);
+        if (outputPath) await fs.writeFile(outputPath, "");
+      },
+      renderVideoOnly: async ({ videoOnlyPath }) => {
+        await fs.writeFile(videoOnlyPath, "");
+      },
+      finalFfmpegExport: async ({ outputPath }) => {
+        await fs.writeFile(outputPath, "");
+      },
+    });
+    messages = info.mock.calls.map(([message]) => String(message));
+  } finally {
+    info.mockRestore();
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+  }
+  expect(messages).toEqual(
+    expect.arrayContaining([
+      expect.stringMatching(
+        /^\[Timing\] FFmpeg audio concat\/transcode completed in \d+\.\d{2}s$/,
+      ),
+      expect.stringMatching(
+        /^\[Timing\] Final mux\/re-encode completed in \d+\.\d{2}s$/,
+      ),
+      expect.stringMatching(
+        /^\[Timing\] Temp cleanup completed in \d+\.\d{2}s$/,
+      ),
+    ]),
+  );
+});
+
+it("reports final export progress only after final mux completes", async () => {
+  const workspaceDir = await fs.mkdtemp(
+    path.join(process.cwd(), ".tmp-export-test-"),
+  );
+  const outputDir = path.join(workspaceDir, "output");
+  const project = createTestProject();
+  const events: string[] = [];
+
+  try {
+    await exportProject({
+      project,
+      outputDir,
+      workspaceDir,
+      onProgress: (progress) => events.push("progress:" + progress),
+      runFfmpeg: async (args) => {
+        const outputPath = args.at(-1);
+        if (outputPath) await fs.writeFile(outputPath, "");
+      },
+      renderVideoOnly: async ({ videoOnlyPath, onProgress }) => {
+        await fs.writeFile(videoOnlyPath, "");
+        onProgress?.(0.6);
+      },
+      finalFfmpegExport: async ({ outputPath }) => {
+        events.push("final-mux:start");
+        await fs.mkdir(path.dirname(outputPath), { recursive: true });
+        await fs.writeFile(outputPath, "");
+        events.push("final-mux:complete");
+      },
+    });
+  } finally {
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+  }
+
+  expect(events).toEqual([
+    "progress:0.2",
+    "progress:0.6",
+    "final-mux:start",
+    "final-mux:complete",
+    "progress:1",
+  ]);
 });
 
 it("cleans temporary export files by default after a successful export", async () => {
