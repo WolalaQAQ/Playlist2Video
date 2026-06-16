@@ -1,3 +1,13 @@
+## [0.1.11] - 2026-06-16
+
+### Fixes
+
+- Fixed `Request body is too large` when exporting multi-song playlists. The web client now strips deterministic, audio-derived `spectrumFrames` from the export request, and the server rehydrates them from the saved project by track id, keeping the request body small while preserving full-density spectrum in the render.
+
+### Design Rationale
+
+- `spectrumFrames` is computed once at scan and persisted to `project.json`, so it does not need to travel over HTTP on every export. Stripping and rehydrating keeps the export payload constant regardless of playlist length instead of relying on an ever-larger request body limit.
+
 ## [0.1.10] - 2026-06-16
 
 ### Features

@@ -1,7 +1,11 @@
 import {beforeEach, describe, expect, it, vi} from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import Fastify from 'fastify';
 import type {Project} from '@playlist2video/shared';
 import {registerExportRoutes} from './export-routes';
+import {ProjectStore} from '../projects/project-store';
 
 const exportMocks = vi.hoisted(() => ({
   exportProject: vi.fn(),
@@ -30,6 +34,32 @@ const previewProject = {
   updatedAt: new Date(0).toISOString(),
 } satisfies Project;
 
+async function setupSavedProject(spectrumFrames: number[][]) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'p2v-export-routes-'));
+  const store = new ProjectStore(root);
+  const saved = await store.save({
+    name: 'Saved',
+    sourceFolder: 'C:/Music',
+    tracks: [{
+      id: 'track-1',
+      sourcePath: 'C:/Music/01.mp3',
+      title: 'Original',
+      artist: 'Artist',
+      album: null,
+      durationSeconds: 10,
+      coverPath: null,
+      renderCoverPath: null,
+      waveformPeaks: [0.1, 0.2],
+      spectrumFrames,
+      order: 0,
+    }],
+    theme: previewProject.theme,
+    exportConfig: previewProject.exportConfig,
+  });
+  const tmpConfig = {host: '127.0.0.1', port: 0, workspaceDir: root, assetsDir: path.join(root, 'assets'), outputDir: path.join(root, 'output')};
+  return {root, saved, config: tmpConfig};
+}
+
 describe('export routes', () => {
   beforeEach(() => {
     exportMocks.exportProject.mockReset();
@@ -44,6 +74,30 @@ describe('export routes', () => {
 
     expect(response.statusCode).toBe(200);
     expect(exportMocks.exportProject).toHaveBeenCalledWith(expect.objectContaining({project: previewProject}));
+    await app.close();
+  });
+
+  it('rehydrates spectrumFrames from the saved project for tracks in the posted snapshot', async () => {
+    const {saved, config: tmpConfig} = await setupSavedProject([[0.5, 0.6]]);
+    const app = Fastify();
+    await registerExportRoutes(app, tmpConfig);
+
+    // The web client strips heavy spectrumFrames before posting; the snapshot still edits the title.
+    const snapshot = {
+      ...saved,
+      tracks: saved.tracks.map((track) => {
+        const copy: Record<string, unknown> = {...track, title: 'Edited Title'};
+        delete copy.spectrumFrames;
+        return copy;
+      }),
+    };
+
+    const response = await app.inject({method: 'POST', url: '/api/v1/exports', payload: {project: snapshot}});
+
+    expect(response.statusCode).toBe(200);
+    const calledProject = exportMocks.exportProject.mock.calls[0][0].project as Project;
+    expect(calledProject.tracks[0].title).toBe('Edited Title');
+    expect(calledProject.tracks[0].spectrumFrames).toEqual([[0.5, 0.6]]);
     await app.close();
   });
 });

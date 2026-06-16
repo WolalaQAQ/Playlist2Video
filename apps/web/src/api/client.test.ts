@@ -39,6 +39,21 @@ describe('api client request headers', () => {
     expect(headers.get('Content-Type')).toBe('application/json');
   });
 
+  it('omits heavy spectrumFrames from the export request body', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(successfulJson({outputPath: 'C:/out/playlist-video.mp4'}));
+    const project = {
+      id: 'project-1',
+      tracks: [{id: 'track-1', spectrumFrames: [[0.1, 0.2], [0.3, 0.4]]}],
+    } as unknown as Project;
+
+    await exportCurrentProject(project);
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(String(init?.body));
+    expect(body.project.tracks[0]).not.toHaveProperty('spectrumFrames');
+    expect(body.project.tracks[0].id).toBe('track-1');
+  });
+
   it('keeps the JSON content type when a request has a JSON body', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(successfulJson({project: null, warnings: []}));
 

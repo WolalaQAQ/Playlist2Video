@@ -19,5 +19,16 @@ export const reorderTracks = (trackIds: string[]) => request<Project>('/projects
 export const updateTrackMetadata = (input: {trackId: string; title: string; artist: string}) => request<Project>('/projects/current/tracks', {method: 'PATCH', body: JSON.stringify(input)});
 export const updateProjectSettings = (input: {theme?: Partial<ThemeConfig>; exportConfig?: Partial<ExportConfig>}) =>
   request<Project>('/projects/current/settings', {method: 'PATCH', body: JSON.stringify(input)});
+
+// spectrumFrames is deterministic, audio-derived data the server already saved during scan.
+// It serializes to megabytes per track, so we strip it here and let the server rehydrate it
+// from the saved project, keeping the export request body small.
+function stripHeavyTrackData(project: Project): Project {
+  return {
+    ...project,
+    tracks: project.tracks.map(({spectrumFrames: _spectrumFrames, ...track}) => track),
+  };
+}
+
 export const exportCurrentProject = (project?: Project) =>
-  request<{outputPath: string}>('/exports', project ? {method: 'POST', body: JSON.stringify({project})} : {method: 'POST'});
+  request<{outputPath: string}>('/exports', project ? {method: 'POST', body: JSON.stringify({project: stripHeavyTrackData(project)})} : {method: 'POST'});
