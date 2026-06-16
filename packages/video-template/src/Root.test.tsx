@@ -7,13 +7,13 @@ import type {PlaylistVideoProps} from './PlaylistVideo';
 import {RemotionRoot} from './Root';
 
 const remotionMock = vi.hoisted(() => ({
-  compositionProps: null as null | {calculateMetadata: (input: {props: PlaylistVideoProps}) => unknown},
+  compositionProps: null as null | {calculateMetadata: (input: {props: PlaylistVideoProps}) => unknown; schema?: unknown},
 }));
 
 vi.mock('remotion', async () => {
   const ReactActual = await vi.importActual<typeof React>('react');
   return {
-    Composition: (props: {calculateMetadata: (input: {props: PlaylistVideoProps}) => unknown}) => {
+    Composition: (props: {calculateMetadata: (input: {props: PlaylistVideoProps}) => unknown; schema?: unknown}) => {
       remotionMock.compositionProps = props;
       return ReactActual.createElement('div', {'data-testid': 'composition'});
     },
@@ -80,6 +80,12 @@ describe('RemotionRoot metadata', () => {
       width: 1280,
       height: 720,
     });
+  });
+
+  it('passes a Zod schema to validate Remotion composition props', () => {
+    render(<RemotionRoot />);
+
+    expect(remotionMock.compositionProps?.schema).toBeTruthy();
   });
 });
 

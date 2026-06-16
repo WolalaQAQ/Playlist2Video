@@ -9,6 +9,7 @@ import {
   buildFinalFfmpegArgs,
   buildFinalFfmpegCopyArgs,
   detectH264HardwareEncoder,
+  exportProject,
   normalizeRemotionServeUrl,
   prepareProjectForRemotionRender,
   renderProjectVideoOnly,
@@ -104,21 +105,23 @@ it("normalizes Remotion localhost serve URLs to IPv4 loopback", () => {
   );
 });
 
-it("downsamples dense spectrum frames before passing project props to Remotion", () => {
+it("preserves dense spectrum frames so exported visuals match preview behavior", () => {
   const project = createTestProject();
+  const spectrumFrames = Array.from({ length: 1800 }, (_, frameIndex) => [
+    frameIndex / 1800,
+    1 - frameIndex / 1800,
+  ]);
   project.tracks[0] = {
     ...project.tracks[0],
     durationSeconds: 60,
-    spectrumFrames: Array.from({ length: 1800 }, (_, frameIndex) => [
-      frameIndex / 1800,
-      1 - frameIndex / 1800,
-    ]),
+    spectrumFrames,
   };
 
   const prepared = prepareProjectForRemotionRender(project);
 
   expect(prepared).not.toBe(project);
-  expect(prepared.tracks[0].spectrumFrames?.length).toBeLessThanOrEqual(600);
+  expect(prepared.tracks[0].spectrumFrames).toBe(spectrumFrames);
+  expect(prepared.tracks[0].spectrumFrames?.length).toBe(1800);
   expect(prepared.tracks[0].spectrumFrames?.[0]).toEqual([0, 1]);
   expect(prepared.tracks[0].spectrumFrames?.at(-1)?.[0]).toBeGreaterThan(0.95);
 });
@@ -153,7 +156,7 @@ it("renders Remotion through one stable IPv4 bundle server", async () => {
       width: project.exportConfig.width,
       height: project.exportConfig.height,
       fps: project.exportConfig.fps,
-        durationInFrames: 30,
+      durationInFrames: 30,
         props: {},
         defaultProps: {},
         defaultCodec: null,
@@ -187,10 +190,67 @@ it("renders Remotion through one stable IPv4 bundle server", async () => {
   expect(renderedServeUrls).toEqual(["http://127.0.0.1:3000/"]);
   expect(renderOptions[0]).toMatchObject({
     disallowParallelEncoding: false,
-    concurrency: 4,
     videoBitrate: "12000k",
   });
+  expect(renderOptions[0]).toHaveProperty("concurrency");
   expect(closed).toEqual([false]);
+});
+
+it("cleans temporary export files by default after a successful export", async () => {
+  const workspaceDir = await fs.mkdtemp(path.join(process.cwd(), ".tmp-export-test-"));
+  const outputDir = path.join(workspaceDir, "output");
+  const project = createTestProject();
+  const createdTempDirs: string[] = [];
+
+  await exportProject({
+    project,
+    outputDir,
+    workspaceDir,
+    runFfmpeg: async (args) => {
+      const outputPath = args.at(-1);
+      if (outputPath) await fs.writeFile(outputPath, "");
+    },
+    renderVideoOnly: async ({tempDir, videoOnlyPath}) => {
+      createdTempDirs.push(tempDir);
+      await fs.writeFile(videoOnlyPath, "");
+    },
+    finalFfmpegExport: async ({outputPath}) => {
+      await fs.mkdir(path.dirname(outputPath), {recursive: true});
+      await fs.writeFile(outputPath, "");
+    },
+  });
+
+  await expect(fs.stat(createdTempDirs[0])).rejects.toMatchObject({code: "ENOENT"});
+  await fs.rm(workspaceDir, {recursive: true, force: true});
+});
+
+it("can preserve temporary export files for diagnostics", async () => {
+  const workspaceDir = await fs.mkdtemp(path.join(process.cwd(), ".tmp-export-test-"));
+  const outputDir = path.join(workspaceDir, "output");
+  const project = createTestProject();
+  const createdTempDirs: string[] = [];
+
+  await exportProject({
+    project,
+    outputDir,
+    workspaceDir,
+    keepTempFiles: true,
+    runFfmpeg: async (args) => {
+      const outputPath = args.at(-1);
+      if (outputPath) await fs.writeFile(outputPath, "");
+    },
+    renderVideoOnly: async ({tempDir, videoOnlyPath}) => {
+      createdTempDirs.push(tempDir);
+      await fs.writeFile(videoOnlyPath, "");
+    },
+    finalFfmpegExport: async ({outputPath}) => {
+      await fs.mkdir(path.dirname(outputPath), {recursive: true});
+      await fs.writeFile(outputPath, "");
+    },
+  });
+
+  await expect(fs.stat(createdTempDirs[0])).resolves.toBeTruthy();
+  await fs.rm(workspaceDir, {recursive: true, force: true});
 });
 
 it("maps only audio during FFmpeg concat so embedded MP3 cover art is not encoded as video", () => {

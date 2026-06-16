@@ -1,3 +1,30 @@
+## [0.1.10] - 2026-06-16
+
+### Features
+
+- Export now sends the last generated preview project snapshot to the server, so MP4 rendering uses the same playlist order and visual settings shown in the preview.
+- Added a Remotion bundle smoke script (`npm run verify:remotion`) for a fast render-template sanity check.
+
+### Fixes
+
+- Removed the export-side spectrum frame-count cap so Remotion export uses the same full-density `spectrumFrames` as the Web preview, eliminating preview/output mismatch.
+- Preserved full-density spectrum frames when preparing Remotion input props for export.
+- Disabled export while the generated preview is stale after playlist or parameter edits, requiring another Generate video click before exporting.
+- Matched the preview shell aspect ratio to the configured export width and height.
+- Added a Zod schema to the Remotion composition and renamed the frequency visualizer from the legacy Waveform name.
+- Updated audio preview sequences to use `layout="none"`, `premountFor`, and consistent rounded frame boundaries.
+- Cleaned export temporary directories by default while preserving an explicit diagnostic option.
+- Pinned Remotion package versions used by the project instead of leaving them on `latest`.
+
+### Design Rationale
+
+- The generated preview is treated as the source of truth for export, avoiding silent differences when users edit state after preview generation.
+- Spectrum visuals use the same full analyzed data in both Web preview and Remotion export; no export-only spectrum downsampling is applied, so the configurable spectrum FPS quantization behaves identically in preview and export.
+- `audioVolumePercent` remains an FFmpeg export-audio setting only, so the Remotion preview audio stays at normal playback volume while exported audio uses the configured mux volume.
+
+### Notes & Caveats
+
+- If a preview is stale, export is intentionally blocked until Generate video refreshes the preview snapshot.
 # Changelog
 
 ## [0.1.9] - 2026-06-16

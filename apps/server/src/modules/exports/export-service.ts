@@ -40,6 +40,9 @@ export interface RunFinalFfmpegExportOptions {
   logWarn?: (message: string) => void;
 }
 
+type RenderVideoOnlyForExport = (options: RenderProjectVideoOnlyOptions) => Promise<void>;
+type FinalFfmpegExportForExport = (options: RunFinalFfmpegExportOptions) => Promise<void>;
+
 type PrepareRemotionServerOptions = Parameters<
   typeof RenderInternals.prepareServer
 >[0];
@@ -78,7 +81,6 @@ const h264HardwareEncoderPriority: H264HardwareEncoder[] = [
   "h264_qsv",
   "h264_amf",
 ];
-const maxSpectrumFramesForRemotionTrack = 600;
 
 export function escapeFfmpegConcatPath(filePath: string): string {
   return filePath.replaceAll("'", "'\\''");
@@ -193,33 +195,8 @@ export async function renderProjectVideoOnly(
 export function prepareProjectForRemotionRender(project: Project): Project {
   return {
     ...project,
-    tracks: project.tracks.map((track) => ({
-      ...track,
-      spectrumFrames: downsampleSpectrumFrames(track.spectrumFrames),
-    })),
+    tracks: project.tracks.map((track) => ({...track})),
   };
-}
-
-function downsampleSpectrumFrames(
-  spectrumFrames: number[][] | undefined,
-): number[][] | undefined {
-  if (
-    !spectrumFrames ||
-    spectrumFrames.length <= maxSpectrumFramesForRemotionTrack
-  ) {
-    return spectrumFrames;
-  }
-
-  return Array.from(
-    { length: maxSpectrumFramesForRemotionTrack },
-    (_, index) => {
-      const sourceIndex = Math.round(
-        (index / (maxSpectrumFramesForRemotionTrack - 1)) *
-          (spectrumFrames.length - 1),
-      );
-      return spectrumFrames[sourceIndex];
-    },
-  );
 }
 
 export function buildAudioFfmpegArgs(
@@ -461,6 +438,10 @@ export async function exportProject(options: {
   outputDir: string;
   workspaceDir: string;
   onProgress?: (progress: number) => void;
+  keepTempFiles?: boolean;
+  runFfmpeg?: (args: string[]) => Promise<void>;
+  renderVideoOnly?: RenderVideoOnlyForExport;
+  finalFfmpegExport?: FinalFfmpegExportForExport;
 }): Promise<{ outputPath: string }> {
   await fs.mkdir(options.outputDir, { recursive: true });
   const tempDir = path.join(
@@ -479,42 +460,53 @@ export async function exportProject(options: {
     options.project.exportConfig.outputFileName,
   );
 
-  await fs.writeFile(
-    concatListPath,
-    buildFfmpegConcatList(tracks.map((track) => track.sourcePath)),
-    "utf8",
-  );
-  console.info(
-    "[FFmpeg] Concatenating playlist audio. FFmpeg progress is shown below.",
-  );
-  await execa(
-    "ffmpeg",
-    buildAudioFfmpegArgs(
+  const runFfmpeg =
+    options.runFfmpeg ??
+    ((args: string[]) =>
+      execa("ffmpeg", args, getVisibleFfmpegOptions()).then(() => undefined));
+  const renderVideoOnly = options.renderVideoOnly ?? renderProjectVideoOnly;
+  const finalFfmpegExport = options.finalFfmpegExport ?? runFinalFfmpegExport;
+
+  try {
+    await fs.writeFile(
       concatListPath,
-      concatAudioPath,
-      options.project.exportConfig,
-    ),
-    getVisibleFfmpegOptions(),
-  );
-  options.onProgress?.(0.2);
+      buildFfmpegConcatList(tracks.map((track) => track.sourcePath)),
+      "utf8",
+    );
+    console.info(
+      "[FFmpeg] Concatenating playlist audio. FFmpeg progress is shown below.",
+    );
+    await runFfmpeg(
+      buildAudioFfmpegArgs(
+        concatListPath,
+        concatAudioPath,
+        options.project.exportConfig,
+      ),
+    );
+    options.onProgress?.(0.2);
 
-  await renderProjectVideoOnly({
-    project: options.project,
-    workspaceDir: options.workspaceDir,
-    tempDir,
-    videoOnlyPath,
-    onProgress: options.onProgress,
-  });
+    await renderVideoOnly({
+      project: options.project,
+      workspaceDir: options.workspaceDir,
+      tempDir,
+      videoOnlyPath,
+      onProgress: options.onProgress,
+    });
 
-  console.info(
-    "[FFmpeg] Combining video and audio. Attempting GPU acceleration when available.",
-  );
-  await runFinalFfmpegExport({
-    videoPath: videoOnlyPath,
-    audioPath: concatAudioPath,
-    outputPath,
-    videoBitrateKbps: options.project.exportConfig.videoBitrateKbps,
-  });
-  options.onProgress?.(1);
-  return { outputPath };
+    console.info(
+      "[FFmpeg] Combining video and audio. Attempting GPU acceleration when available.",
+    );
+    await finalFfmpegExport({
+      videoPath: videoOnlyPath,
+      audioPath: concatAudioPath,
+      outputPath,
+      videoBitrateKbps: options.project.exportConfig.videoBitrateKbps,
+    });
+    options.onProgress?.(1);
+    return { outputPath };
+  } finally {
+    if (!options.keepTempFiles) {
+      await fs.rm(tempDir, {recursive: true, force: true});
+    }
+  }
 }

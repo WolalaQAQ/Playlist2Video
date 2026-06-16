@@ -15,9 +15,9 @@
     "fastify": "latest",
     "music-metadata": "latest",
     "sharp": "latest",
-    "zod": "latest",
-    "@remotion/bundler": "latest",
-    "@remotion/renderer": "latest",
+    "zod": "4.3.6",
+    "@remotion/bundler": "4.0.477",
+    "@remotion/renderer": "4.0.477",
     "execa": "latest"
   },
   "devDependencies": {

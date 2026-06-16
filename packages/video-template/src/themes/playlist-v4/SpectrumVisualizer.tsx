@@ -1,4 +1,4 @@
-import React from 'react';
+import React, {useMemo} from 'react';
 import {spectrumFrameAt} from './spectrumEnergy';
 
 const clamp = (value: number, min = 0, max = 1) => Math.max(min, Math.min(max, value));
@@ -88,6 +88,7 @@ export const SpectrumVisualizer: React.FC<{spectrumFrames?: number[][]; progress
   const sourceFrame = spectrumFrames?.length ? spectrumFrameAt(spectrumFrames, progress) : fallbackSpectrumFrame(48, progress, energy);
   const safeEnergy = clamp(energy);
   const renderedBands = Array.from({length: bands}, (_, index) => sampleBand(sourceFrame, (index / Math.max(1, bands - 1)) * Math.max(0, sourceFrame.length - 1)));
+  const bandColors = useMemo(() => Array.from({length: bands}, (_, index) => colorForBand(index, bands)), [bands]);
   const frameMin = renderedBands.reduce((lowest, value) => Math.min(lowest, value), 1);
   const frameMax = renderedBands.reduce((highest, value) => Math.max(highest, value), 0);
   const frameSpan = Math.max(0, frameMax - frameMin);
@@ -102,7 +103,7 @@ export const SpectrumVisualizer: React.FC<{spectrumFrames?: number[][]; progress
         const transientLift = Math.max(0, localContrast - clamp(band)) * (18 + safeEnergy * 10);
         const height = clamp(10 + shaped * 86 + transientLift + safeEnergy * (bassWeight * 12 + trebleSpark * 9), 5, 100);
         const brightness = clamp(0.58 + shaped * 0.32 + safeEnergy * 0.16, 0.52, 1);
-        const color = colorForBand(index, bands);
+        const color = bandColors[index];
         return (
           <div
             className="p2v-spectrum-bar is-spectrum"
@@ -122,5 +123,3 @@ export const SpectrumVisualizer: React.FC<{spectrumFrames?: number[][]; progress
     </div>
   );
 };
-
-export const Waveform = SpectrumVisualizer;

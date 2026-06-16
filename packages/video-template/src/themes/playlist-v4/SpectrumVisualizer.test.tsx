@@ -2,7 +2,7 @@
 import React from 'react';
 import {cleanup, render} from '@testing-library/react';
 import {afterEach, describe, expect, it} from 'vitest';
-import {SpectrumVisualizer} from './Waveform';
+import {SpectrumVisualizer} from './SpectrumVisualizer';
 
 function renderedHeights(): number[] {
   return Array.from(document.querySelectorAll<HTMLElement>('.p2v-spectrum-bar')).map((bar) => Number.parseFloat(bar.style.height));

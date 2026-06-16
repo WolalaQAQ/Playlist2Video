@@ -21,6 +21,7 @@ export const App: React.FC = () => {
   const store = useProjectStore();
   const [language, setLanguage] = useState<Language>(getInitialLanguage);
   const [previewProject, setPreviewProject] = useState<Project | null>(null);
+  const [isPreviewStale, setIsPreviewStale] = useState(false);
   const copy = translations[language];
   const nextLanguage = useMemo<Language>(() => (language === 'zh' ? 'en' : 'zh'), [language]);
 
@@ -35,12 +36,32 @@ export const App: React.FC = () => {
 
   async function handleScan(folderPath: string) {
     setPreviewProject(null);
+    setIsPreviewStale(false);
     await store.scan(folderPath);
   }
 
   function handleGenerateVideo() {
     if (!store.project) return;
     setPreviewProject(cloneProject(store.project));
+    setIsPreviewStale(false);
+  }
+
+  async function handleReorder(trackIds: string[]) {
+    setIsPreviewStale(Boolean(previewProject));
+    const project = await store.reorder(trackIds);
+    return project;
+  }
+
+  async function handleUpdateTrack(input: {trackId: string; title: string; artist: string}) {
+    setIsPreviewStale(Boolean(previewProject));
+    const project = await store.updateTrack(input);
+    return project;
+  }
+
+  async function handleUpdateSettings(settings: Parameters<typeof store.updateSettings>[0]) {
+    setIsPreviewStale(Boolean(previewProject));
+    const project = await store.updateSettings(settings);
+    return project;
   }
 
   return (
@@ -63,7 +84,7 @@ export const App: React.FC = () => {
           <FolderImporter copy={copy.folderImporter} loading={store.loading} onScan={handleScan} />
           {store.error ? <div className="error-box">{store.error}</div> : null}
           {store.warnings.length > 0 ? <div className="warning-box">{store.warnings.join('\n')}</div> : null}
-          {store.project ? <PlaylistEditor copy={copy.playlist} project={store.project} onReorder={store.reorder} onUpdateTrack={store.updateTrack} /> : null}
+          {store.project ? <PlaylistEditor copy={copy.playlist} project={store.project} onReorder={handleReorder} onUpdateTrack={handleUpdateTrack} /> : null}
         </div>
         <div className="right-column">
           <section className="card generate-panel">
@@ -74,8 +95,8 @@ export const App: React.FC = () => {
             <button disabled={!store.project} onClick={handleGenerateVideo}>{copy.generate.button}</button>
           </section>
           <VideoPreview copy={copy.preview} project={previewProject} hasEditableProject={Boolean(store.project)} />
-          <ThemePanel copy={copy.theme} project={store.project} onUpdateSettings={store.updateSettings} />
-          <ExportPanel copy={copy.exportPanel} project={store.project} />
+          <ThemePanel copy={copy.theme} project={store.project} onUpdateSettings={handleUpdateSettings} />
+          <ExportPanel copy={copy.exportPanel} project={store.project} previewProject={previewProject} isPreviewStale={isPreviewStale} />
         </div>
       </main>
     </div>

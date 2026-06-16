@@ -16,6 +16,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc -b --pretty false",
     "verify": "npm run typecheck && npm test",
+    "verify:remotion": "npm --workspace @playlist2video/video-template run smoke:bundle",
     "verify:audit": "npm audit --audit-level=moderate",
     "format": "prettier --write ."
   },

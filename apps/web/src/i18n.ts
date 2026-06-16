@@ -93,6 +93,8 @@ export const translations = {
       title: '导出',
       button: '导出 MP4',
       exportingButton: '导出中...',
+      needsPreview: '请先点击“生成视频”构建预览，再导出当前预览快照。',
+      previewStale: '当前预览已过期；请重新点击“生成视频”后再导出。',
       exportedTo: (outputPath: string) => `已导出到 ${outputPath}`,
       fallbackError: '导出失败',
     },
@@ -187,6 +189,8 @@ export const translations = {
       title: 'Export',
       button: 'Export MP4',
       exportingButton: 'Exporting...',
+      needsPreview: 'Generate the preview first, then export that preview snapshot.',
+      previewStale: 'The current preview is stale. Generate video again before exporting.',
       exportedTo: (outputPath: string) => `Exported to ${outputPath}`,
       fallbackError: 'Export failed',
     },
@@ -265,6 +269,8 @@ export const translations = {
     title: string;
     button: string;
     exportingButton: string;
+    needsPreview: string;
+    previewStale: string;
     exportedTo: (outputPath: string) => string;
     fallbackError: string;
   };

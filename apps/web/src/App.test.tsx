@@ -8,8 +8,10 @@ import {App} from './App';
 import * as client from './api/client';
 
 vi.mock('@remotion/player', () => ({
-  Player: ({inputProps}: {inputProps: {project: Project}}) => (
-    <div data-testid="remotion-player">{inputProps.project.tracks.sort((a, b) => a.order - b.order).map((track) => track.title).join(' > ')}</div>
+  Player: ({inputProps, style}: {inputProps: {project: Project}; style?: React.CSSProperties}) => (
+    <div data-aspect-ratio={style?.aspectRatio} data-testid="remotion-player">
+      {inputProps.project.tracks.sort((a, b) => a.order - b.order).map((track) => track.title).join(' > ')}
+    </div>
   ),
 }));
 
@@ -143,7 +145,7 @@ describe('App preview generation', () => {
     expect(screen.queryByText('Default output: 1920x1080, 30fps, MP4.')).not.toBeInTheDocument();
   });
 
-  it('keeps the generated preview unchanged while tracks are reordered, then refreshes it on Generate video', async () => {
+  it('marks the generated preview stale while tracks are reordered, then refreshes it on Generate video', async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -160,13 +162,15 @@ describe('App preview generation', () => {
 
     expect(client.reorderTracks).toHaveBeenCalledWith(['track-2', 'track-1']);
     expect(screen.getByTestId('remotion-player')).toHaveTextContent('Alpha > Beta');
+    expect(screen.getByRole('button', {name: '导出 MP4'})).toBeDisabled();
 
     await user.click(screen.getByRole('button', {name: '生成视频'}));
 
     expect(screen.getByTestId('remotion-player')).toHaveTextContent('Beta > Alpha');
+    expect(screen.getByRole('button', {name: '导出 MP4'})).toBeEnabled();
   });
 
-  it('saves parameter changes without auto-refreshing the generated preview', async () => {
+  it('marks the generated preview stale when parameter changes are saved', async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -181,6 +185,35 @@ describe('App preview generation', () => {
 
     expect(client.updateProjectSettings).toHaveBeenCalledWith({theme: {effectIntensity: 'medium'}});
     expect(screen.getByTestId('remotion-player')).toHaveTextContent('Alpha > Beta');
+    expect(screen.getByRole('button', {name: '导出 MP4'})).toBeDisabled();
+  });
+
+  it('exports the current generated preview snapshot after Generate video is clicked', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(screen.getByPlaceholderText('C:\\Users\\You\\Music\\Playlist'), 'C:\\Music');
+    await user.click(screen.getByRole('button', {name: '扫描文件夹'}));
+    await screen.findByDisplayValue('Alpha');
+    await user.click(screen.getByRole('button', {name: '生成视频'}));
+    await user.click(screen.getByRole('button', {name: '导出 MP4'}));
+
+    expect(client.exportCurrentProject).toHaveBeenCalledWith(scannedProject);
+  });
+
+  it('uses the project aspect ratio for the Remotion player preview shell', async () => {
+    const user = userEvent.setup();
+    const portraitProject = projectWithTracks([track('track-1', 'Alpha', 0)]);
+    portraitProject.exportConfig = {...portraitProject.exportConfig, width: 1080, height: 1920};
+    vi.mocked(client.scanFolder).mockResolvedValue({project: portraitProject, warnings: []});
+    render(<App />);
+
+    await user.type(screen.getByPlaceholderText('C:\\Users\\You\\Music\\Playlist'), 'C:\\Music');
+    await user.click(screen.getByRole('button', {name: '扫描文件夹'}));
+    await screen.findByDisplayValue('Alpha');
+    await user.click(screen.getByRole('button', {name: '生成视频'}));
+
+    expect(screen.getByTestId('remotion-player')).toHaveAttribute('data-aspect-ratio', '1080 / 1920');
   });
 });
 

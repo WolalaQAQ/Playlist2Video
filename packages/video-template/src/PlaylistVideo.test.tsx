@@ -15,12 +15,12 @@ const themeCssPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'th
 vi.mock('remotion', async () => {
   const ReactActual = await vi.importActual<typeof React>('react');
   return {
-    Audio: ({src, from, durationInFrames}: {src: string; from: number; durationInFrames: number}) =>
-      ReactActual.createElement('audio', {'data-testid': 'preview-audio', src, 'data-from': from, 'data-duration': durationInFrames}),
+    Audio: ({src, from, durationInFrames, volume}: {src: string; from: number; durationInFrames: number; volume?: number}) =>
+      ReactActual.createElement('audio', {'data-testid': 'preview-audio', src, 'data-from': from, 'data-duration': durationInFrames, 'data-volume': volume}),
     Img: ({src, className}: {src: string; className?: string}) => ReactActual.createElement('img', {src, className, alt: ''}),
     interpolate: () => 0.5,
-    Sequence: ({children, from, durationInFrames}: {children: React.ReactNode; from: number; durationInFrames: number}) =>
-      ReactActual.createElement('div', {'data-sequence-from': from, 'data-sequence-duration': durationInFrames}, children),
+    Sequence: ({children, from, durationInFrames, layout, premountFor}: {children: React.ReactNode; from: number; durationInFrames: number; layout?: string; premountFor?: number}) =>
+      ReactActual.createElement('div', {'data-sequence-from': from, 'data-sequence-duration': durationInFrames, 'data-sequence-layout': layout, 'data-sequence-premount': premountFor}, children),
     staticFile: (input: string) => `/static/${input}`,
     useCurrentFrame: () => remotionState.currentFrame,
     useVideoConfig: () => ({fps: 30}),
@@ -121,6 +121,8 @@ describe('PlaylistVideo', () => {
     expect(audio[0].getAttribute('src')).toBe('http://127.0.0.1:4317/api/v1/projects/current/media/track-1/audio?v=01.mp3');
     expect(audio[0].parentElement?.getAttribute('data-sequence-from')).toBe('0');
     expect(audio[0].parentElement?.getAttribute('data-sequence-duration')).toBe('60');
+    expect(audio[0].parentElement?.getAttribute('data-sequence-layout')).toBe('none');
+    expect(audio[0].parentElement?.getAttribute('data-sequence-premount')).toBe('30');
     expect(audio[1].getAttribute('src')).toBe('http://127.0.0.1:4317/api/v1/projects/current/media/track-2/audio?v=02.mp3');
     expect(audio[1].parentElement?.getAttribute('data-sequence-from')).toBe('60');
     expect(audio[1].parentElement?.getAttribute('data-sequence-duration')).toBe('90');
@@ -138,6 +140,13 @@ describe('PlaylistVideo', () => {
     const bars = Array.from(document.querySelectorAll<HTMLElement>('.p2v-spectrum-bar'));
     expect(bars).toHaveLength(32);
     expect(bars.some((bar) => Number.parseFloat(bar.style.height) > 50)).toBe(true);
+  });
+
+  it('does not apply export audio volume settings to Remotion preview audio', () => {
+    render(<PlaylistVideo project={{...project, exportConfig: {...project.exportConfig, audioVolumePercent: 35}}} />);
+
+    const audio = screen.getAllByTestId('preview-audio');
+    expect(audio[0].getAttribute('data-volume')).toBeNull();
   });
 
   it('updates spectrum bars as playback advances through the current track', () => {

@@ -12,7 +12,7 @@
   "dependencies": {
     "@playlist2video/shared": "0.1.0",
     "@playlist2video/video-template": "0.1.0",
-    "@remotion/player": "latest",
+    "@remotion/player": "4.0.477",
     "react": "latest",
     "react-dom": "latest"
   }

@@ -1,4 +1,5 @@
 import {beforeEach, describe, expect, it, vi} from 'vitest';
+import type {Project} from '@playlist2video/shared';
 import {exportCurrentProject, scanFolder} from './client';
 
 function successfulJson<T>(data: T): Response {
@@ -23,6 +24,19 @@ describe('api client request headers', () => {
     expect(init?.method).toBe('POST');
     expect(init?.body).toBeUndefined();
     expect(headers.has('Content-Type')).toBe(false);
+  });
+
+  it('sends the preview project snapshot when exporting a generated preview', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(successfulJson({outputPath: 'C:/out/playlist-video.mp4'}));
+    const project = {id: 'project-1', tracks: []} as unknown as Project;
+
+    await exportCurrentProject(project);
+
+    const [, init] = fetchMock.mock.calls[0];
+    const headers = new Headers(init?.headers);
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(JSON.stringify({project}));
+    expect(headers.get('Content-Type')).toBe('application/json');
   });
 
   it('keeps the JSON content type when a request has a JSON body', async () => {

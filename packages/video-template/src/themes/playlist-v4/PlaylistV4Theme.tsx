@@ -1,24 +1,25 @@
-import React from 'react';
+import React, {useMemo} from 'react';
 import {Audio, Img, Sequence, staticFile, useCurrentFrame, useVideoConfig} from 'remotion';
 import {buildTimeline, findTrackAtTime, getTotalDuration} from '@playlist2video/shared';
 import type {PlaylistVideoProps} from '../../PlaylistVideo';
 import {BeatEffects} from './BeatEffects';
 import {PlaylistPanel} from './PlaylistPanel';
-import {SpectrumVisualizer} from './Waveform';
+import {SpectrumVisualizer} from './SpectrumVisualizer';
 import {getSpectrumEnergyProfile} from './spectrumEnergy';
 import {getTrackTitleFontSize} from './titleSizing';
 import './theme.css';
 
 const fmt = (seconds: number) => `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`;
 const fmtCount = (value: number) => String(value).padStart(2, '0');
+type SequenceWithPremountProps = React.ComponentProps<typeof Sequence> & {premountFor?: number};
 
 export const PlaylistV4Theme: React.FC<PlaylistVideoProps> = ({project}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
   const currentTime = frame / fps;
-  const timeline = buildTimeline(project.tracks);
+  const timeline = useMemo(() => buildTimeline(project.tracks), [project.tracks]);
   const currentTrack = findTrackAtTime(timeline, currentTime);
-  const totalDurationSeconds = getTotalDuration(timeline);
+  const totalDurationSeconds = useMemo(() => getTotalDuration(timeline), [timeline]);
   const index = currentTrack ? timeline.findIndex((track) => track.id === currentTrack.id) : 0;
   const localTime = currentTrack ? currentTime - currentTrack.startSeconds : 0;
   const progress = currentTrack ? Math.max(0, Math.min(1, localTime / currentTrack.durationSeconds)) : 0;
@@ -27,7 +28,8 @@ export const PlaylistV4Theme: React.FC<PlaylistVideoProps> = ({project}) => {
   const spectrumProgress = currentTrack ? Math.max(0, Math.min(1, quantizedLocalTime / currentTrack.durationSeconds)) : 0;
   const renderQuality = project.exportConfig.renderQuality;
   const energyProfile = getSpectrumEnergyProfile({spectrumFrames: currentTrack?.spectrumFrames, progress: spectrumProgress});
-  const audioTracks = timeline.filter((track) => track.audioPreviewUrl);
+  const audioTracks = useMemo(() => timeline.filter((track) => track.audioPreviewUrl), [timeline]);
+  const AudioSequence = Sequence as React.ComponentType<SequenceWithPremountProps>;
 
   if (!currentTrack) return <div className="p2v-root p2v-empty">No tracks loaded</div>;
 
@@ -47,9 +49,15 @@ export const PlaylistV4Theme: React.FC<PlaylistVideoProps> = ({project}) => {
       }
     >
       {audioTracks.map((track) => (
-        <Sequence key={track.id} from={Math.round(track.startSeconds * fps)} durationInFrames={Math.ceil(track.durationSeconds * fps)}>
+        <AudioSequence
+          key={track.id}
+          from={Math.round(track.startSeconds * fps)}
+          durationInFrames={Math.max(1, Math.round(track.endSeconds * fps) - Math.round(track.startSeconds * fps))}
+          layout="none"
+          premountFor={fps}
+        >
           <Audio src={track.audioPreviewUrl!} />
-        </Sequence>
+        </AudioSequence>
       ))}
       <div className="p2v-bg" />
       <BeatEffects energyProfile={energyProfile} config={project.theme} renderQuality={renderQuality} />

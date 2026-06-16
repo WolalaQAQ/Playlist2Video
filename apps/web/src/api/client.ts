@@ -19,4 +19,5 @@ export const reorderTracks = (trackIds: string[]) => request<Project>('/projects
 export const updateTrackMetadata = (input: {trackId: string; title: string; artist: string}) => request<Project>('/projects/current/tracks', {method: 'PATCH', body: JSON.stringify(input)});
 export const updateProjectSettings = (input: {theme?: Partial<ThemeConfig>; exportConfig?: Partial<ExportConfig>}) =>
   request<Project>('/projects/current/settings', {method: 'PATCH', body: JSON.stringify(input)});
-export const exportCurrentProject = () => request<{outputPath: string}>('/exports', {method: 'POST'});
+export const exportCurrentProject = (project?: Project) =>
+  request<{outputPath: string}>('/exports', project ? {method: 'POST', body: JSON.stringify({project})} : {method: 'POST'});

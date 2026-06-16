@@ -1,9 +1,14 @@
 import React from 'react';
 import {Composition, type CalculateMetadataFunction} from 'remotion';
-import {buildTimeline, getTotalDuration} from '@playlist2video/shared';
+import {buildTimeline, getTotalDuration, ProjectSchema} from '@playlist2video/shared';
+import {z} from 'zod';
 import {PlaylistVideo, type PlaylistVideoProps} from './PlaylistVideo';
 
 const defaultFps = 30;
+export const PlaylistVideoSchema = z.object({
+  project: ProjectSchema,
+});
+
 const calculateMetadata: CalculateMetadataFunction<PlaylistVideoProps> = ({props}) => {
   const fps = props.project.exportConfig.fps;
 
@@ -37,6 +42,7 @@ export const RemotionRoot: React.FC = () => (
       },
     }}
     calculateMetadata={calculateMetadata}
+    schema={PlaylistVideoSchema}
   />
 );
 

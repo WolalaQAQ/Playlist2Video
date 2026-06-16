@@ -6,11 +6,16 @@
   "main": "src/index.ts",
   "types": "src/index.ts",
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "smoke:bundle": "tsx scripts/smoke-bundle.ts"
   },
   "dependencies": {
     "@playlist2video/shared": "0.1.0",
-    "@remotion/media-utils": "latest",
-    "remotion": "latest"
+    "@remotion/media-utils": "4.0.477",
+    "remotion": "4.0.477"
+  },
+  "devDependencies": {
+    "@remotion/bundler": "4.0.477",
+    "tsx": "latest"
   }
 }
