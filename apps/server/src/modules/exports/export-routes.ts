@@ -5,6 +5,7 @@ import type {ServerConfig} from '../../config';
 import {data} from '../../lib/api-response';
 import {ProjectStore} from '../projects/project-store';
 import {exportProject} from './export-service';
+import {exportProjectStills} from './still-export-service';
 
 const exportRequestSchema = z.object({
   project: ProjectSchema.optional(),
@@ -32,5 +33,11 @@ export async function registerExportRoutes(app: FastifyInstance, config: ServerC
     const body = exportRequestSchema.parse(request.body ?? {});
     const project = body?.project ? await rehydrateSpectrumFrames(body.project, store) : await store.load();
     return data(await exportProject({project, outputDir: config.outputDir, workspaceDir: config.workspaceDir}));
+  });
+
+  app.post('/api/v1/exports/stills', async (request) => {
+    const body = exportRequestSchema.parse(request.body ?? {});
+    const project = body?.project ? await rehydrateSpectrumFrames(body.project, store) : await store.load();
+    return data(await exportProjectStills({project, outputDir: config.outputDir, workspaceDir: config.workspaceDir}));
   });
 }

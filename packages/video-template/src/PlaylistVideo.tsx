@@ -4,6 +4,8 @@ import {getThemeComponent} from './themes/registry';
 
 export interface PlaylistVideoProps extends Record<string, unknown> {
   project: Project;
+  renderMode?: 'video' | 'static-image';
+  stillTrackId?: string;
 }
 
 export const PlaylistVideo: React.FC<PlaylistVideoProps> = (props) => {

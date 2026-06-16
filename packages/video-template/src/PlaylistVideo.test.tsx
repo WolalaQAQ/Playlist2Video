@@ -336,6 +336,14 @@ describe('PlaylistVideo', () => {
     expect(css).toContain('backdrop-filter:none');
     expect(css).toContain('.p2v-quality-minimal .p2v-cover-glow');
   });
+
+  it('hides audio, progress, and spectrum when rendering static images for a selected track', () => {
+    render(<PlaylistVideo project={project} renderMode="static-image" stillTrackId="track-2" />);
+
+    expect(screen.queryAllByTestId('preview-audio')).toHaveLength(0);
+    expect(document.querySelector('.p2v-spectrum')).toBeNull();
+    expect(document.querySelector('.p2v-progress')).toBeNull();
+    expect(screen.queryByRole('heading', {level: 1, name: 'Second'})).not.toBeNull();
+    expect(screen.queryByText('NOW PLAYING · 02/02')).not.toBeNull();
+  });
 });
-
-

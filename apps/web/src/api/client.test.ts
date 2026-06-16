@@ -1,6 +1,6 @@
 import {beforeEach, describe, expect, it, vi} from 'vitest';
 import type {Project} from '@playlist2video/shared';
-import {exportCurrentProject, scanFolder} from './client';
+import {exportCurrentProject, exportCurrentProjectStills, scanFolder} from './client';
 
 function successfulJson<T>(data: T): Response {
   return {
@@ -62,6 +62,20 @@ describe('api client request headers', () => {
     const [, init] = fetchMock.mock.calls[0];
     const headers = new Headers(init?.headers);
     expect(init?.body).toBe(JSON.stringify({folderPath: 'C:/Music'}));
+    expect(headers.get('Content-Type')).toBe('application/json');
+  });
+
+  it('posts the preview snapshot to the still image export endpoint', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(successfulJson({outputDir: 'C:/out/stills', files: []}));
+    const project = {id: 'project-1', tracks: []} as unknown as Project;
+
+    await exportCurrentProjectStills(project);
+
+    const [url, init] = fetchMock.mock.calls[0];
+    const headers = new Headers(init?.headers);
+    expect(url).toBe('http://127.0.0.1:4317/api/v1/exports/stills');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(JSON.stringify({project}));
     expect(headers.get('Content-Type')).toBe('application/json');
   });
 });

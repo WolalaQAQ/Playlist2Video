@@ -1,3 +1,22 @@
+## [0.1.13] - 2026-06-17
+
+### Features
+
+- Added static PNG still export that renders one image per playlist track from the existing Playlist V4 visual style.
+- Added `POST /api/v1/exports/stills` and a Web UI "Export PNG stills" action returning the output directory and generated file list.
+- Added Remotion static-image render mode that keeps cover/title/artist/playlist information while hiding audio, progress, and spectrum-only dynamic layers.
+
+### Design Rationale
+
+- Reused the existing Remotion composition and theme so stills match the video style without duplicating layout code.
+- Kept the still export service separate from MP4 export progress/muxing logic to avoid coupling static image generation to video export timing behavior.
+- Used safe, ordered PNG filenames so the generated files are predictable on Windows and easy to import as static video素材.
+
+### Notes & Caveats
+
+- Static image export uses the last generated preview snapshot like MP4 export, and is disabled when the preview is stale.
+- Generated stills are written under the configured output directory's `stills` folder.
+
 ## [0.1.12] - 2026-06-17
 
 ### Features
@@ -53,6 +72,7 @@
 ### Notes & Caveats
 
 - If a preview is stale, export is intentionally blocked until Generate video refreshes the preview snapshot.
+
 # Changelog
 
 ## [0.1.9] - 2026-06-16

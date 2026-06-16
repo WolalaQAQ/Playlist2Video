@@ -21,6 +21,7 @@ import {
   getVisibleFfmpegOptions,
   selectH264HardwareEncoder,
 } from "./export-service";
+import {buildStillOutputPlan, exportProjectStills} from './still-export-service';
 
 const repoRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -1008,3 +1009,145 @@ function createTestProject(): Project {
     updatedAt: "2026-06-16T00:00:00.000Z",
   };
 }
+
+
+it("builds safe per-track PNG output paths", () => {
+  const project = createTestProject();
+  project.tracks = [
+    {...project.tracks[0], id: "track-2", title: "Second: Track?", order: 1},
+    {...project.tracks[0], id: "track-1", title: "First / Track", order: 0},
+  ];
+
+  expect(buildStillOutputPlan({project, outputDir: "C:/out"})).toEqual([
+    {trackId: "track-1", outputPath: path.join("C:/out", "stills", "1-First - Track.png")},
+    {trackId: "track-2", outputPath: path.join("C:/out", "stills", "2-Second- Track.png")},
+  ]);
+});
+
+it("renders one static PNG still per track using static render mode", async () => {
+  const project = createTestProject();
+  project.tracks = [
+    {...project.tracks[0], id: "track-1", title: "First", order: 0},
+    {...project.tracks[0], id: "track-2", title: "Second", order: 1},
+  ];
+  const rendered: unknown[] = [];
+  const selectedProps: unknown[] = [];
+  const closed: boolean[] = [];
+
+  const result = await exportProjectStills({
+    project,
+    outputDir: "C:/out",
+    workspaceDir: "C:/workspace",
+    bundleRemotion: async (options) => String(options.outDir),
+    startBundleServer: async () => ({serveUrl: "http://127.0.0.1:3000/", close: async (force) => { closed.push(force); }}),
+    selectCompositionFn: async (options) => {
+      selectedProps.push(options.inputProps);
+      return {
+        id: "PlaylistVideo",
+        width: project.exportConfig.width,
+        height: project.exportConfig.height,
+        fps: project.exportConfig.fps,
+        durationInFrames: 30,
+        props: {},
+        defaultProps: {},
+        defaultCodec: null,
+        defaultOutName: null,
+        defaultVideoImageFormat: null,
+        defaultPixelFormat: null,
+        defaultProResProfile: null,
+        defaultSampleRate: null,
+      };
+    },
+    renderStillFn: async (options) => {
+      rendered.push(options);
+      await fs.mkdir(path.dirname(String(options.output)), {recursive: true});
+      await fs.writeFile(String(options.output), "png");
+      return {buffer: null, contentType: "image/png"};
+    },
+  });
+
+  expect(result.outputDir).toBe(path.join("C:/out", "stills"));
+  expect(result.files).toEqual([
+    {trackId: "track-1", title: "First", outputPath: path.join("C:/out", "stills", "1-First.png")},
+    {trackId: "track-2", title: "Second", outputPath: path.join("C:/out", "stills", "2-Second.png")},
+  ]);
+  expect(selectedProps).toHaveLength(1);
+  expect(selectedProps[0]).toMatchObject({renderMode: "static-image"});
+  expect(rendered).toHaveLength(2);
+  expect(rendered[0]).toMatchObject({imageFormat: "png", frame: 0, output: path.join("C:/out", "stills", "1-First.png")});
+  expect(rendered[0]).toHaveProperty("inputProps", expect.objectContaining({renderMode: "static-image", stillTrackId: "track-1"}));
+  expect(rendered[1]).toHaveProperty("inputProps", expect.objectContaining({renderMode: "static-image", stillTrackId: "track-2"}));
+  expect(closed).toEqual([false]);
+});
+
+it("pads still image filenames to the number of digits in the track count", () => {
+  const project = createTestProject();
+  project.tracks = Array.from({length: 120}, (_, index) => ({
+    ...project.tracks[0],
+    id: `track-${index + 1}`,
+    title: `Track ${index + 1}`,
+    order: index,
+  }));
+
+  const fileNames = buildStillOutputPlan({project, outputDir: "C:/out"}).map((item) => path.basename(item.outputPath));
+
+  expect(fileNames[0]).toBe("001-Track 1.png");
+  expect(fileNames[9]).toBe("010-Track 10.png");
+  expect(fileNames[99]).toBe("100-Track 100.png");
+  expect([...fileNames].sort()).toEqual(fileNames);
+});
+
+it("builds safe and unique still image filenames for empty, illegal, and repeated titles", () => {
+  const project = createTestProject();
+  project.tracks = [
+    {...project.tracks[0], id: "track-empty", title: "", order: 0},
+    {...project.tracks[0], id: "track-illegal", title: 'CON<>:"/\\|?*  ', order: 1},
+    {...project.tracks[0], id: "track-repeat-a", title: "Same Title", order: 2},
+    {...project.tracks[0], id: "track-repeat-b", title: "Same Title", order: 3},
+  ];
+
+  const fileNames = buildStillOutputPlan({project, outputDir: "C:/out"}).map((item) => path.basename(item.outputPath));
+
+  expect(fileNames).toEqual(["1-track.png", "2-track.png", "3-Same Title.png", "4-Same Title.png"]);
+  expect(new Set(fileNames).size).toBe(fileNames.length);
+  expect(fileNames.every((fileName) => !/[<>:"/\\|?*\u0000-\u001f]/.test(fileName))).toBe(true);
+});
+
+it("cleans temporary still export files if bundling fails before the Remotion server starts", async () => {
+  const workspaceDir = await fs.mkdtemp(path.join(process.cwd(), ".tmp-still-export-test-"));
+  const project = createTestProject();
+
+  await expect(exportProjectStills({
+    project,
+    outputDir: path.join(workspaceDir, "output"),
+    workspaceDir,
+    bundleRemotion: async (options) => {
+      await fs.mkdir(String(options.outDir), {recursive: true});
+      throw new Error("bundle failed");
+    },
+  })).rejects.toThrow("bundle failed");
+
+  await expect(fs.readdir(path.join(workspaceDir, ".tmp"))).resolves.toEqual([]);
+  await fs.rm(workspaceDir, {recursive: true, force: true});
+});
+
+it("cleans temporary still export files if the Remotion server fails to start", async () => {
+  const workspaceDir = await fs.mkdtemp(path.join(process.cwd(), ".tmp-still-export-test-"));
+  const project = createTestProject();
+
+  await expect(exportProjectStills({
+    project,
+    outputDir: path.join(workspaceDir, "output"),
+    workspaceDir,
+    bundleRemotion: async (options) => {
+      await fs.mkdir(String(options.outDir), {recursive: true});
+      return String(options.outDir);
+    },
+    startBundleServer: async () => {
+      throw new Error("server failed");
+    },
+  })).rejects.toThrow("server failed");
+
+  await expect(fs.readdir(path.join(workspaceDir, ".tmp"))).resolves.toEqual([]);
+  await fs.rm(workspaceDir, {recursive: true, force: true});
+});

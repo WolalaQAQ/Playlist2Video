@@ -13,12 +13,14 @@ const fmt = (seconds: number) => `${Math.floor(seconds / 60)}:${Math.floor(secon
 const fmtCount = (value: number) => String(value).padStart(2, '0');
 type SequenceWithPremountProps = React.ComponentProps<typeof Sequence> & {premountFor?: number};
 
-export const PlaylistV4Theme: React.FC<PlaylistVideoProps> = ({project}) => {
+export const PlaylistV4Theme: React.FC<PlaylistVideoProps> = ({project, renderMode = 'video', stillTrackId}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
-  const currentTime = frame / fps;
+  const isStaticImage = renderMode === 'static-image';
   const timeline = useMemo(() => buildTimeline(project.tracks), [project.tracks]);
-  const currentTrack = findTrackAtTime(timeline, currentTime);
+  const stillTrack = isStaticImage && stillTrackId ? timeline.find((track) => track.id === stillTrackId) : null;
+  const currentTime = stillTrack ? stillTrack.startSeconds : frame / fps;
+  const currentTrack = stillTrack ?? findTrackAtTime(timeline, currentTime);
   const totalDurationSeconds = useMemo(() => getTotalDuration(timeline), [timeline]);
   const index = currentTrack ? timeline.findIndex((track) => track.id === currentTrack.id) : 0;
   const localTime = currentTrack ? currentTime - currentTrack.startSeconds : 0;
@@ -48,17 +50,19 @@ export const PlaylistV4Theme: React.FC<PlaylistVideoProps> = ({project}) => {
         } as React.CSSProperties
       }
     >
-      {audioTracks.map((track) => (
-        <AudioSequence
-          key={track.id}
-          from={Math.round(track.startSeconds * fps)}
-          durationInFrames={Math.max(1, Math.round(track.endSeconds * fps) - Math.round(track.startSeconds * fps))}
-          layout="none"
-          premountFor={fps}
-        >
-          <Audio src={track.audioPreviewUrl!} />
-        </AudioSequence>
-      ))}
+      {!isStaticImage
+        ? audioTracks.map((track) => (
+            <AudioSequence
+              key={track.id}
+              from={Math.round(track.startSeconds * fps)}
+              durationInFrames={Math.max(1, Math.round(track.endSeconds * fps) - Math.round(track.startSeconds * fps))}
+              layout="none"
+              premountFor={fps}
+            >
+              <Audio src={track.audioPreviewUrl!} />
+            </AudioSequence>
+          ))
+        : null}
       <div className="p2v-bg" />
       <BeatEffects energyProfile={energyProfile} config={project.theme} renderQuality={renderQuality} />
       <main className="p2v-layout">
@@ -71,15 +75,17 @@ export const PlaylistV4Theme: React.FC<PlaylistVideoProps> = ({project}) => {
             <div className="p2v-kicker">NOW PLAYING · {fmtCount(index + 1)}/{fmtCount(timeline.length)}</div>
             <h1 style={{fontSize: getTrackTitleFontSize(currentTrack.title)}}>{currentTrack.title}</h1>
             <p>{currentTrack.artist}{currentTrack.album ? ` — ${currentTrack.album}` : ''}</p>
-            <div className="p2v-progress">
-              <div className="p2v-time-row"><span>{fmt(localTime)}</span><span>{fmt(currentTrack.durationSeconds)}</span></div>
-              <div className="p2v-progress-track"><div style={{width: `${Math.max(0, Math.min(100, progress * 100))}%`}} /></div>
-            </div>
+            {!isStaticImage ? (
+              <div className="p2v-progress">
+                <div className="p2v-time-row"><span>{fmt(localTime)}</span><span>{fmt(currentTrack.durationSeconds)}</span></div>
+                <div className="p2v-progress-track"><div style={{width: `${Math.max(0, Math.min(100, progress * 100))}%`}} /></div>
+              </div>
+            ) : null}
           </div>
         </section>
         <PlaylistPanel timeline={timeline} currentTrackId={currentTrack.id} totalDurationSeconds={totalDurationSeconds} />
       </main>
-      <SpectrumVisualizer spectrumFrames={currentTrack.spectrumFrames} progress={spectrumProgress} energy={energyProfile.overall} />
+      {!isStaticImage ? <SpectrumVisualizer spectrumFrames={currentTrack.spectrumFrames} progress={spectrumProgress} energy={energyProfile.overall} /> : null}
     </div>
   );
 };
