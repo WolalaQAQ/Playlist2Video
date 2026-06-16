@@ -98,20 +98,21 @@ it("starts a stable Remotion bundle server over IPv4 loopback and closes it", as
   expect(closedWith).toBe(true);
 });
 
-it("defaults Remotion GPU rendering to desktop ANGLE and rejects invalid GL backends", () => {
+it("uses desktop ANGLE GPU rendering by default and rejects invalid GL backends", () => {
+  expect(getRemotionChromiumOptionsFromEnv({})).toEqual({ gl: "angle" });
   expect(
     getRemotionChromiumOptionsFromEnv({ PLAYLIST2VIDEO_REMOTION_GPU: "1" }),
   ).toEqual({ gl: "angle" });
   expect(
     getRemotionChromiumOptionsFromEnv({
-      PLAYLIST2VIDEO_REMOTION_GPU: "1",
       PLAYLIST2VIDEO_REMOTION_GL: "angle-egl",
     }),
   ).toEqual({ gl: "angle-egl" });
-  expect(getRemotionChromiumOptionsFromEnv({})).toBeUndefined();
+  expect(
+    getRemotionChromiumOptionsFromEnv({ PLAYLIST2VIDEO_REMOTION_GPU: "0" }),
+  ).toBeUndefined();
   expect(() =>
     getRemotionChromiumOptionsFromEnv({
-      PLAYLIST2VIDEO_REMOTION_GPU: "1",
       PLAYLIST2VIDEO_REMOTION_GL: "not-real",
     }),
   ).toThrow(/Invalid PLAYLIST2VIDEO_REMOTION_GL/);

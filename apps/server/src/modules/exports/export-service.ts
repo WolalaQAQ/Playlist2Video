@@ -103,7 +103,10 @@ const validRemotionGlRenderers: RemotionOpenGlRenderer[] = [
 export function getRemotionChromiumOptionsFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): RemotionChromiumOptions | undefined {
-  if (env.PLAYLIST2VIDEO_REMOTION_GPU !== "1") return undefined;
+  const gpuSetting = env.PLAYLIST2VIDEO_REMOTION_GPU?.toLowerCase();
+  if (gpuSetting === "0" || gpuSetting === "false" || gpuSetting === "off") {
+    return undefined;
+  }
 
   const gl = env.PLAYLIST2VIDEO_REMOTION_GL ?? "angle";
   if (!validRemotionGlRenderers.includes(gl as RemotionOpenGlRenderer)) {
