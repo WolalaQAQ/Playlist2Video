@@ -120,4 +120,26 @@ describe('export routes', () => {
     expect(exportMocks.exportProjectStills).toHaveBeenCalledWith(expect.objectContaining({project: previewProject}));
     await app.close();
   });
+  it('rehydrates spectrumFrames for still image exports from stripped preview snapshots', async () => {
+    exportMocks.exportProjectStills.mockResolvedValue({outputDir: 'C:/workspace/output/stills', files: []});
+    const {saved, config: tmpConfig} = await setupSavedProject([[0.7, 0.8]]);
+    const app = Fastify();
+    await registerExportRoutes(app, tmpConfig);
+    const snapshot = {
+      ...saved,
+      tracks: saved.tracks.map((track) => {
+        const copy: Record<string, unknown> = {...track, title: 'Still Edited'};
+        delete copy.spectrumFrames;
+        return copy;
+      }),
+    };
+
+    const response = await app.inject({method: 'POST', url: '/api/v1/exports/stills', payload: {project: snapshot}});
+
+    expect(response.statusCode).toBe(200);
+    const calledProject = exportMocks.exportProjectStills.mock.calls[0][0].project as Project;
+    expect(calledProject.tracks[0].title).toBe('Still Edited');
+    expect(calledProject.tracks[0].spectrumFrames).toEqual([[0.7, 0.8]]);
+    await app.close();
+  });
 });

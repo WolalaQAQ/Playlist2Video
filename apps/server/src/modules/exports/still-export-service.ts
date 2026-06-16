@@ -60,11 +60,13 @@ export function buildStillOutputPlan(options: {
   outputDir: string;
 }): StillOutputPlanItem[] {
   const stillsDir = path.join(options.outputDir, "stills");
-  return sortedTracks(options.project).map((track, index) => ({
+  const tracks = sortedTracks(options.project);
+  const indexWidth = String(tracks.length).length;
+  return tracks.map((track, index) => ({
     trackId: track.id,
     outputPath: path.join(
       stillsDir,
-      `${String(index + 1).padStart(2, "0")}-${sanitizeStillFileNameSegment(track.title)}.png`,
+      `${String(index + 1).padStart(indexWidth, "0")}-${sanitizeStillFileNameSegment(track.title)}.png`,
     ),
   }));
 }
@@ -87,17 +89,18 @@ export async function exportProjectStills(
     project: renderProject,
     renderMode: "static-image" as const,
   };
-  const bundledServeUrl = await bundleRemotion({
-    entryPoint: getRemotionEntryPoint(),
-    outDir: bundleDir,
-    publicDir: path.join(options.workspaceDir, "assets"),
-  });
-  const server = await startBundleServer({
-    bundleDir: bundledServeUrl,
-    sampleRate: options.project.exportConfig.audioSampleRate,
-  });
+  let server: Awaited<ReturnType<typeof startRemotionBundleServer>> | null = null;
 
   try {
+    const bundledServeUrl = await bundleRemotion({
+      entryPoint: getRemotionEntryPoint(),
+      outDir: bundleDir,
+      publicDir: path.join(options.workspaceDir, "assets"),
+    });
+    server = await startBundleServer({
+      bundleDir: bundledServeUrl,
+      sampleRate: options.project.exportConfig.audioSampleRate,
+    });
     const composition = await selectCompositionFn({
       serveUrl: server.serveUrl,
       id: "PlaylistVideo",
@@ -131,8 +134,7 @@ export async function exportProjectStills(
 
     return { outputDir, files };
   } finally {
-    await server.close(false);
+    await server?.close(false);
     await fs.rm(tempDir, {recursive: true, force: true});
   }
 }
-
