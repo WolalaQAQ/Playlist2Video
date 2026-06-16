@@ -34,6 +34,9 @@ async function setupProject() {
       height: 1080,
       fps: 30,
       videoCodec: 'h264',
+      videoBitrateKbps: 12000,
+      spectrumFps: 30,
+      renderQuality: 'high',
       outputFileName: 'playlist-video.mp4',
       audioCodec: 'aac',
       audioBitrateKbps: 320,
@@ -110,6 +113,9 @@ describe('project settings route', () => {
           width: 1280,
           height: 720,
           fps: 24,
+          videoBitrateKbps: 8000,
+          spectrumFps: 12,
+          renderQuality: 'minimal',
           outputFileName: 'custom-playlist.mp4',
           audioBitrateKbps: 256,
           audioSampleRate: 44100,
@@ -132,6 +138,9 @@ describe('project settings route', () => {
       height: 720,
       fps: 24,
       videoCodec: 'h264',
+      videoBitrateKbps: 8000,
+      spectrumFps: 12,
+      renderQuality: 'minimal',
       outputFileName: 'custom-playlist.mp4',
       audioCodec: 'aac',
       audioBitrateKbps: 256,
@@ -147,11 +156,79 @@ describe('project settings route', () => {
     expect(persisted.exportConfig.width).toBe(1280);
     expect(persisted.exportConfig.height).toBe(720);
     expect(persisted.exportConfig.fps).toBe(24);
+    expect(persisted.exportConfig.videoBitrateKbps).toBe(8000);
+    expect(persisted.exportConfig.spectrumFps).toBe(12);
+    expect(persisted.exportConfig.renderQuality).toBe('minimal');
     expect(persisted.exportConfig.outputFileName).toBe('custom-playlist.mp4');
     expect(persisted.exportConfig.audioBitrateKbps).toBe(256);
     expect(persisted.exportConfig.audioSampleRate).toBe(44100);
     expect(persisted.exportConfig.audioChannels).toBe(1);
     expect(persisted.exportConfig.audioVolumePercent).toBe(85);
+    await app.close();
+  });
+
+  it('preserves existing parameter values when saving a single setting', async () => {
+    const {config, project} = await setupProject();
+    await new ProjectStore(config.workspaceDir).save({
+      ...project,
+      theme: {
+        themeId: 'playlist-v4',
+        effectIntensity: 'low',
+        showParticles: false,
+        showPulseRings: false,
+        playlistPanelMode: 'full',
+      },
+      exportConfig: {
+        width: 1280,
+        height: 720,
+        fps: 30,
+        videoCodec: 'h264',
+        videoBitrateKbps: 8000,
+        spectrumFps: 12,
+        renderQuality: 'fast',
+        outputFileName: 'custom-playlist.mp4',
+        audioCodec: 'aac',
+        audioBitrateKbps: 256,
+        audioSampleRate: 44100,
+        audioChannels: 1,
+        audioVolumePercent: 85,
+      },
+    });
+    const app = await buildApp(config);
+
+    const response = await app.inject({
+      method: 'PATCH',
+      url: '/api/v1/projects/current/settings',
+      payload: {
+        theme: {effectIntensity: 'medium'},
+        exportConfig: {fps: 60},
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.theme).toEqual({
+      themeId: 'playlist-v4',
+      effectIntensity: 'medium',
+      showParticles: false,
+      showPulseRings: false,
+      playlistPanelMode: 'full',
+    });
+    expect(response.json().data.exportConfig).toEqual({
+      width: 1280,
+      height: 720,
+      fps: 60,
+      videoCodec: 'h264',
+      videoBitrateKbps: 8000,
+      spectrumFps: 12,
+      renderQuality: 'fast',
+      outputFileName: 'custom-playlist.mp4',
+      audioCodec: 'aac',
+      audioBitrateKbps: 256,
+      audioSampleRate: 44100,
+      audioChannels: 1,
+      audioVolumePercent: 85,
+    });
+
     await app.close();
   });
 
@@ -164,7 +241,7 @@ describe('project settings route', () => {
       url: '/api/v1/projects/current/settings',
       payload: {
         theme: {effectIntensity: 'extreme'},
-        exportConfig: {width: 0, fps: 0, outputFileName: '', audioBitrateKbps: 0, audioSampleRate: 0, audioChannels: 0, audioVolumePercent: 0},
+        exportConfig: {width: 0, fps: 0, videoBitrateKbps: 0, spectrumFps: 0, renderQuality: 'ultra', outputFileName: '', audioBitrateKbps: 0, audioSampleRate: 0, audioChannels: 0, audioVolumePercent: 0},
       },
     });
 

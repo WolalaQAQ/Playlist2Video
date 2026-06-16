@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.1.9] - 2026-06-16
+
+### Features
+
+- Added independent `spectrumFps` export setting so the frequency spectrum visualizer can update at a lower rate than the video FPS.
+- Added render quality presets, including a new `minimal` mode that suppresses particles, pulse rings, strobe, and flash effects.
+- Changed the parameter panel FPS control from a select box to a numeric input and added controls for spectrum FPS and render quality.
+- Reduced embedded cover render assets from 900x900 to 768x768 JPEGs to lower per-frame image compositing cost.
+- Added a stream-copy FFmpeg final mux path before GPU/CPU re-encode fallback.
+
+### Design Rationale
+
+- Decoupling spectrum FPS keeps the main video timeline smooth while reducing repeated spectrum sampling work in Remotion renders.
+- The minimal quality preset targets long/full-HD exports where Chromium per-frame rendering is the bottleneck, not final FFmpeg encoding.
+- Stream-copy final mux avoids an unnecessary second video encode when Remotion has already produced a compatible H.264 MP4.
+
+### Notes & Caveats
+
+- Existing project files without `spectrumFps` or `renderQuality` automatically receive defaults of 30 FPS and `high` quality.
+- If stream-copy mux fails due container/codec incompatibility, export falls back to the existing GPU encoder detection and CPU `libx264` path.
+- Full Remotion export speed is still primarily limited by Chromium rendering of each frame; these changes reduce avoidable visual and mux overhead but do not remove Remotion from the pipeline.
+
+## [0.1.8] - 2026-06-16
+
+### Features
+
+- Added a video bitrate parameter to the Web UI export settings and persisted it in project export config.
+- Applied the configured video bitrate to both the Remotion video render stage and the final FFmpeg video encode.
+
+### Fixes
+
+- Fixed parameter panel PATCH validation so saving one theme/export option no longer fills omitted settings with schema defaults and resets the rest of the panel.
+
+### Design Rationale
+
+- Split full config schemas from PATCH schemas because defaults are correct when creating/loading a complete project, but unsafe when validating sparse setting updates.
+- Stored video bitrate as integer kbps in shared config so the UI can expose a simple numeric field while render/export code formats it for Remotion and FFmpeg.
+
+### Notes & Caveats
+
+- Existing project files without `videoBitrateKbps` automatically receive the default 12000 kbps value when loaded through the shared project schema.
+
 ## [0.1.7] - 2026-06-16
 
 ### Features

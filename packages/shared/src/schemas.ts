@@ -26,10 +26,19 @@ export const TimelineTrackSchema = TrackSchema.extend({
 export const ThemeConfigSchema = z.object({
   themeId: z.literal('playlist-v4'),
   accentColor: z.string().optional(),
-  effectIntensity: z.enum(['low', 'medium', 'high']).default('high'),
+  effectIntensity: z.enum(['minimal', 'low', 'medium', 'high']).default('high'),
   showParticles: z.boolean().default(true),
   showPulseRings: z.boolean().default(true),
   playlistPanelMode: z.literal('full').default('full'),
+});
+
+export const ThemeConfigPatchSchema = z.object({
+  themeId: z.literal('playlist-v4').optional(),
+  accentColor: z.string().optional(),
+  effectIntensity: z.enum(['minimal', 'low', 'medium', 'high']).optional(),
+  showParticles: z.boolean().optional(),
+  showPulseRings: z.boolean().optional(),
+  playlistPanelMode: z.literal('full').optional(),
 });
 
 export const ExportConfigSchema = z.object({
@@ -37,12 +46,31 @@ export const ExportConfigSchema = z.object({
   height: z.number().int().positive().default(1080),
   fps: z.number().int().positive().default(30),
   videoCodec: z.literal('h264').default('h264'),
+  videoBitrateKbps: z.number().int().positive().default(12000),
+  spectrumFps: z.number().int().positive().default(30),
+  renderQuality: z.enum(['high', 'balanced', 'fast', 'minimal']).default('high'),
   outputFileName: z.string().min(1).default('playlist-video.mp4'),
   audioCodec: z.literal('aac').default('aac'),
   audioBitrateKbps: z.number().int().positive().default(320),
   audioSampleRate: z.union([z.literal(44100), z.literal(48000)]).default(48000),
   audioChannels: z.union([z.literal(1), z.literal(2)]).default(2),
   audioVolumePercent: z.number().int().min(1).max(200).default(100),
+});
+
+export const ExportConfigPatchSchema = z.object({
+  width: z.number().int().positive().optional(),
+  height: z.number().int().positive().optional(),
+  fps: z.number().int().positive().optional(),
+  videoCodec: z.literal('h264').optional(),
+  videoBitrateKbps: z.number().int().positive().optional(),
+  spectrumFps: z.number().int().positive().optional(),
+  renderQuality: z.enum(['high', 'balanced', 'fast', 'minimal']).optional(),
+  outputFileName: z.string().min(1).optional(),
+  audioCodec: z.literal('aac').optional(),
+  audioBitrateKbps: z.number().int().positive().optional(),
+  audioSampleRate: z.union([z.literal(44100), z.literal(48000)]).optional(),
+  audioChannels: z.union([z.literal(1), z.literal(2)]).optional(),
+  audioVolumePercent: z.number().int().min(1).max(200).optional(),
 });
 
 export const ProjectSchema = z.object({

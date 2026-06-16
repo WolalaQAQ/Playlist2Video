@@ -36,7 +36,7 @@ describe('cover assets', () => {
     if (outputPath === null) throw new Error('Expected embedded artwork to produce a cover path');
     const image = await sharp(outputPath.filePath).metadata();
     expect(image.format).toBe('jpeg');
-    expect(image.width).toBe(900);
-    expect(image.height).toBe(900);
+    expect(image.width).toBe(768);
+    expect(image.height).toBe(768);
   });
 });

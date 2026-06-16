@@ -7,6 +7,7 @@ import {
   buildAudioFfmpegArgs,
   buildFfmpegConcatList,
   buildFinalFfmpegArgs,
+  buildFinalFfmpegCopyArgs,
   detectH264HardwareEncoder,
   normalizeRemotionServeUrl,
   prepareProjectForRemotionRender,
@@ -149,9 +150,9 @@ it("renders Remotion through one stable IPv4 bundle server", async () => {
       selectedServeUrls.push(options.serveUrl);
       return {
         id: "PlaylistVideo",
-        width: project.exportConfig.width,
-        height: project.exportConfig.height,
-        fps: project.exportConfig.fps,
+      width: project.exportConfig.width,
+      height: project.exportConfig.height,
+      fps: project.exportConfig.fps,
         durationInFrames: 30,
         props: {},
         defaultProps: {},
@@ -185,8 +186,9 @@ it("renders Remotion through one stable IPv4 bundle server", async () => {
   expect(selectedServeUrls).toEqual(["http://127.0.0.1:3000/"]);
   expect(renderedServeUrls).toEqual(["http://127.0.0.1:3000/"]);
   expect(renderOptions[0]).toMatchObject({
-    disallowParallelEncoding: true,
-    concurrency: 1,
+    disallowParallelEncoding: false,
+    concurrency: 4,
+    videoBitrate: "12000k",
   });
   expect(closed).toEqual([false]);
 });
@@ -197,6 +199,9 @@ it("maps only audio during FFmpeg concat so embedded MP3 cover art is not encode
     height: 1080,
     fps: 30,
     videoCodec: "h264",
+    videoBitrateKbps: 12000,
+    spectrumFps: 30,
+    renderQuality: "high",
     outputFileName: "playlist-video.mp4",
     audioCodec: "aac",
     audioBitrateKbps: 320,
@@ -224,6 +229,9 @@ it("builds FFmpeg audio concat arguments from export settings", () => {
     height: 1080,
     fps: 30,
     videoCodec: "h264",
+    videoBitrateKbps: 12000,
+    spectrumFps: 30,
+    renderQuality: "high",
     outputFileName: "playlist-video.mp4",
     audioCodec: "aac",
     audioBitrateKbps: 256,
@@ -295,6 +303,7 @@ it("builds final FFmpeg args for GPU-accelerated H.264 export", () => {
       audioPath: "audio.m4a",
       outputPath: "out.mp4",
       videoEncoder: "h264_nvenc",
+      videoBitrateKbps: 8000,
     }),
   ).toEqual([
     "-y",
@@ -309,8 +318,37 @@ it("builds final FFmpeg args for GPU-accelerated H.264 export", () => {
     "1:a:0",
     "-c:v",
     "h264_nvenc",
+    "-b:v",
+    "8000k",
     "-pix_fmt",
     "yuv420p",
+    "-c:a",
+    "copy",
+    "-shortest",
+    "out.mp4",
+  ]);
+});
+
+it("builds final FFmpeg stream-copy mux args", () => {
+  expect(
+    buildFinalFfmpegCopyArgs({
+      videoPath: "video.mp4",
+      audioPath: "audio.m4a",
+      outputPath: "out.mp4",
+    }),
+  ).toEqual([
+    "-y",
+    "-stats",
+    "-i",
+    "video.mp4",
+    "-i",
+    "audio.m4a",
+    "-map",
+    "0:v:0",
+    "-map",
+    "1:a:0",
+    "-c:v",
+    "copy",
     "-c:a",
     "copy",
     "-shortest",
@@ -325,6 +363,7 @@ it("builds final FFmpeg args for CPU fallback H.264 export", () => {
       audioPath: "audio.m4a",
       outputPath: "out.mp4",
       videoEncoder: "libx264",
+      videoBitrateKbps: 8000,
     }),
   ).toEqual([
     "-y",
@@ -339,6 +378,8 @@ it("builds final FFmpeg args for CPU fallback H.264 export", () => {
     "1:a:0",
     "-c:v",
     "libx264",
+    "-b:v",
+    "8000k",
     "-preset",
     "medium",
     "-pix_fmt",
@@ -360,13 +401,14 @@ it("uses hardware encoder defaults that work across GPU vendors instead of NVENC
     audioPath: "audio.m4a",
     outputPath: "out.mp4",
     videoEncoder: "h264_qsv",
+    videoBitrateKbps: 8000,
   });
 
   expect(args).toContain("h264_qsv");
   expect(args).not.toContain("p4");
 });
 
-it("falls back to CPU final export when no GPU encoder is detected", async () => {
+it("falls back to CPU final export when stream-copy mux fails and no GPU encoder is detected", async () => {
   const calls: string[][] = [];
   const warnings: string[] = [];
 
@@ -374,39 +416,103 @@ it("falls back to CPU final export when no GPU encoder is detected", async () =>
     videoPath: "video.mp4",
     audioPath: "audio.m4a",
     outputPath: "out.mp4",
+    videoBitrateKbps: 8000,
     detectHardwareEncoder: async () => null,
     runFfmpeg: async (args) => {
       calls.push(args);
-    },
-    logInfo: () => undefined,
-    logWarn: (message) => warnings.push(message),
-  });
-
-  expect(calls).toHaveLength(1);
-  expect(calls[0]).toContain("libx264");
-  expect(warnings.join("\n")).toContain("Falling back to CPU encoder libx264");
-});
-
-it("falls back to CPU final export when the detected GPU encoder fails", async () => {
-  const calls: string[][] = [];
-  const warnings: string[] = [];
-
-  await runFinalFfmpegExport({
-    videoPath: "video.mp4",
-    audioPath: "audio.m4a",
-    outputPath: "out.mp4",
-    detectHardwareEncoder: async () => "h264_nvenc",
-    runFfmpeg: async (args) => {
-      calls.push(args);
-      if (args.includes("h264_nvenc")) throw new Error("GPU unavailable");
+      const videoCodec = args[args.indexOf("-c:v") + 1];
+      if (videoCodec === "copy") throw new Error("copy mux failed");
     },
     logInfo: () => undefined,
     logWarn: (message) => warnings.push(message),
   });
 
   expect(calls).toHaveLength(2);
-  expect(calls[0]).toContain("h264_nvenc");
+  expect(calls[0]).toContain("copy");
   expect(calls[1]).toContain("libx264");
+  expect(calls[1]).toContain("8000k");
+  expect(warnings.join("\n")).toContain("Stream-copy final mux failed");
+  expect(warnings.join("\n")).toContain("Falling back to CPU encoder libx264");
+});
+
+it("uses stream-copy mux before probing GPU encoders for final export", async () => {
+  const calls: string[][] = [];
+  let probedHardware = false;
+
+  await runFinalFfmpegExport({
+    videoPath: "video.mp4",
+    audioPath: "audio.m4a",
+    outputPath: "out.mp4",
+    videoBitrateKbps: 8000,
+    detectHardwareEncoder: async () => {
+      probedHardware = true;
+      return "h264_nvenc";
+    },
+    runFfmpeg: async (args) => {
+      calls.push(args);
+    },
+    logInfo: () => undefined,
+    logWarn: () => undefined,
+  });
+
+  expect(calls).toHaveLength(1);
+  expect(calls[0]).toContain("copy");
+  expect(calls[0]).not.toContain("h264_nvenc");
+  expect(probedHardware).toBe(false);
+});
+
+it("falls back to GPU or CPU re-encode when stream-copy mux fails", async () => {
+  const calls: string[][] = [];
+  const warnings: string[] = [];
+
+  await runFinalFfmpegExport({
+    videoPath: "video.mp4",
+    audioPath: "audio.m4a",
+    outputPath: "out.mp4",
+    videoBitrateKbps: 8000,
+    detectHardwareEncoder: async () => "h264_nvenc",
+    runFfmpeg: async (args) => {
+      calls.push(args);
+      const videoCodec = args[args.indexOf("-c:v") + 1];
+      if (videoCodec === "copy") throw new Error("copy mux failed");
+    },
+    logInfo: () => undefined,
+    logWarn: (message) => warnings.push(message),
+  });
+
+  expect(calls).toHaveLength(2);
+  expect(calls[0]).toContain("copy");
+  expect(calls[1]).toContain("h264_nvenc");
+  expect(warnings.join("\n")).toContain("Stream-copy final mux failed");
+});
+
+it("falls back to CPU final export when stream-copy mux and the detected GPU encoder both fail", async () => {
+  const calls: string[][] = [];
+  const warnings: string[] = [];
+
+  await runFinalFfmpegExport({
+    videoPath: "video.mp4",
+    audioPath: "audio.m4a",
+    outputPath: "out.mp4",
+    videoBitrateKbps: 8000,
+    detectHardwareEncoder: async () => "h264_nvenc",
+    runFfmpeg: async (args) => {
+      calls.push(args);
+      const videoCodec = args[args.indexOf("-c:v") + 1];
+      if (videoCodec === "copy") throw new Error("copy mux failed");
+      if (videoCodec === "h264_nvenc") throw new Error("GPU unavailable");
+    },
+    logInfo: () => undefined,
+    logWarn: (message) => warnings.push(message),
+  });
+
+  expect(calls).toHaveLength(3);
+  expect(calls[0]).toContain("copy");
+  expect(calls[1]).toContain("h264_nvenc");
+  expect(calls[1]).toContain("8000k");
+  expect(calls[2]).toContain("libx264");
+  expect(calls[2]).toContain("8000k");
+  expect(warnings.join("\n")).toContain("Stream-copy final mux failed");
   expect(warnings.join("\n")).toContain("GPU encoder h264_nvenc failed");
   expect(warnings.join("\n")).toContain("Falling back to CPU encoder libx264");
 });
@@ -459,6 +565,7 @@ it("maps final FFmpeg output to video-only from render input and audio from conc
     audioPath: "audio.m4a",
     outputPath: "out.mp4",
     videoEncoder: "libx264",
+    videoBitrateKbps: 8000,
   });
 
   expect(args.slice(args.indexOf("-map"), args.indexOf("-map") + 4)).toEqual([
@@ -513,6 +620,9 @@ function createTestProject(): Project {
       height: 1080,
       fps: 30,
       videoCodec: "h264",
+      videoBitrateKbps: 12000,
+      spectrumFps: 30,
+      renderQuality: "high",
       outputFileName: "playlist-video.mp4",
       audioCodec: "aac",
       audioBitrateKbps: 320,

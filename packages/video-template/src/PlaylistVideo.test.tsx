@@ -67,7 +67,7 @@ const project: Project = {
     },
   ],
   theme: {themeId: 'playlist-v4', effectIntensity: 'low', showParticles: false, showPulseRings: false, playlistPanelMode: 'full'},
-  exportConfig: {width: 1920, height: 1080, fps: 30, videoCodec: 'h264', outputFileName: 'playlist-video.mp4', audioCodec: 'aac', audioBitrateKbps: 320, audioSampleRate: 48000, audioChannels: 2, audioVolumePercent: 100},
+  exportConfig: {width: 1920, height: 1080, fps: 30, videoCodec: 'h264', videoBitrateKbps: 12000, spectrumFps: 30, renderQuality: 'high', outputFileName: 'playlist-video.mp4', audioCodec: 'aac', audioBitrateKbps: 320, audioSampleRate: 48000, audioChannels: 2, audioVolumePercent: 100},
   createdAt: new Date(0).toISOString(),
   updatedAt: new Date(0).toISOString(),
 };
@@ -136,7 +136,7 @@ describe('PlaylistVideo', () => {
     render(<PlaylistVideo project={project} />);
 
     const bars = Array.from(document.querySelectorAll<HTMLElement>('.p2v-spectrum-bar'));
-    expect(bars).toHaveLength(96);
+    expect(bars).toHaveLength(32);
     expect(bars.some((bar) => Number.parseFloat(bar.style.height) > 50)).toBe(true);
   });
 
@@ -150,6 +150,37 @@ describe('PlaylistVideo', () => {
     const laterHeights = Array.from(document.querySelectorAll<HTMLElement>('.p2v-spectrum-bar')).map((bar) => bar.style.height);
 
     expect(laterHeights).not.toEqual(initialHeights);
+  });
+
+  it('can update the spectrum at a lower FPS than the exported video frames', () => {
+    const lowSpectrumProject: Project = {
+      ...project,
+      exportConfig: {...project.exportConfig, spectrumFps: 10},
+      tracks: [
+        {
+          ...project.tracks[0],
+          durationSeconds: 2,
+          spectrumFrames: [
+            [1, 0.8, 0.4, 0.1],
+            [0.1, 0.4, 0.8, 1],
+          ],
+        },
+      ],
+    };
+    remotionState.currentFrame = 0;
+    const {rerender} = render(<PlaylistVideo project={lowSpectrumProject} />);
+    const initialHeights = Array.from(document.querySelectorAll<HTMLElement>('.p2v-spectrum-bar')).map((bar) => bar.style.height);
+
+    remotionState.currentFrame = 1;
+    rerender(<PlaylistVideo project={lowSpectrumProject} />);
+    const sameTickHeights = Array.from(document.querySelectorAll<HTMLElement>('.p2v-spectrum-bar')).map((bar) => bar.style.height);
+
+    remotionState.currentFrame = 3;
+    rerender(<PlaylistVideo project={lowSpectrumProject} />);
+    const nextTickHeights = Array.from(document.querySelectorAll<HTMLElement>('.p2v-spectrum-bar')).map((bar) => bar.style.height);
+
+    expect(sameTickHeights).toEqual(initialHeights);
+    expect(nextTickHeights).not.toEqual(initialHeights);
   });
 
   it('renders the frequency spectrum as a live visualizer instead of a split progress meter', () => {
@@ -198,6 +229,22 @@ describe('PlaylistVideo', () => {
     expect(energy.high).toBeGreaterThan(energy.low);
     expect(particles).toHaveLength(18);
     expect(particles.some((particle) => Number.parseFloat(particle.style.opacity) > 0.6)).toBe(true);
+  });
+
+  it('uses minimal render quality to suppress expensive effect layers', () => {
+    const minimalProject: Project = {
+      ...projectWithEffects([[0.8, 0.7, 0.6, 0.5]]),
+      theme: {...project.theme, effectIntensity: 'minimal', showParticles: true, showPulseRings: true},
+      exportConfig: {...project.exportConfig, renderQuality: 'minimal'},
+    };
+
+    render(<PlaylistVideo project={minimalProject} />);
+
+    expect(document.querySelector('.p2v-root')?.classList.contains('p2v-quality-minimal')).toBe(true);
+    expect(document.querySelectorAll('.p2v-ring')).toHaveLength(0);
+    expect(document.querySelectorAll('.p2v-particle')).toHaveLength(0);
+    expect(document.querySelector('.p2v-strobe')).toBeNull();
+    expect(document.querySelector('.p2v-flash')).toBeNull();
   });
 
   it('formats the now playing position with two-digit current and total counts', () => {
@@ -269,6 +316,16 @@ describe('PlaylistVideo', () => {
     expect(cssRule(css, '.p2v-now,.p2v-copy,.p2v-progress,.p2v-cover')).toMatch(/position:relative/);
     expect(cssRule(css, '.p2v-now,.p2v-copy,.p2v-progress,.p2v-cover')).toMatch(/z-index:3/);
     expect(cssRule(css, '.p2v-spectrum')).toMatch(/z-index:4/);
+  });
+
+  it('defines minimal quality CSS that reduces expensive blur and backdrop filters', () => {
+    const css = readFileSync(themeCssPath, 'utf8');
+
+    expect(css).toContain('.p2v-quality-minimal .p2v-bg');
+    expect(css).toContain('filter:blur(8px)');
+    expect(css).toContain('.p2v-quality-minimal .p2v-spectrum');
+    expect(css).toContain('backdrop-filter:none');
+    expect(css).toContain('.p2v-quality-minimal .p2v-cover-glow');
   });
 });
 

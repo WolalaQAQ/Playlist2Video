@@ -33,6 +33,7 @@ export interface RunFinalFfmpegExportOptions {
   videoPath: string;
   audioPath: string;
   outputPath: string;
+  videoBitrateKbps: number;
   detectHardwareEncoder?: () => Promise<H264HardwareEncoder | null>;
   runFfmpeg?: (args: string[]) => Promise<void>;
   logInfo?: (message: string) => void;
@@ -170,8 +171,9 @@ export async function renderProjectVideoOnly(
       serveUrl: server.serveUrl,
       codec: options.project.exportConfig.videoCodec,
       hardwareAcceleration: "if-possible",
-      disallowParallelEncoding: true,
-      concurrency: 1,
+      disallowParallelEncoding: false,
+      concurrency: 4,
+      videoBitrate: `${options.project.exportConfig.videoBitrateKbps}k`,
       outputLocation: options.videoOnlyPath,
       inputProps: { project: renderProject },
       onProgress: ({ progress }) => {
@@ -334,6 +336,7 @@ export function buildFinalFfmpegArgs(options: {
   audioPath: string;
   outputPath: string;
   videoEncoder: FinalVideoEncoder;
+  videoBitrateKbps: number;
 }): string[] {
   const args = [
     "-y",
@@ -348,6 +351,8 @@ export function buildFinalFfmpegArgs(options: {
     "1:a:0",
     "-c:v",
     options.videoEncoder,
+    "-b:v",
+    `${options.videoBitrateKbps}k`,
   ];
 
   if (options.videoEncoder === "libx264") {
@@ -365,6 +370,31 @@ export function buildFinalFfmpegArgs(options: {
   return args;
 }
 
+export function buildFinalFfmpegCopyArgs(options: {
+  videoPath: string;
+  audioPath: string;
+  outputPath: string;
+}): string[] {
+  return [
+    "-y",
+    "-stats",
+    "-i",
+    options.videoPath,
+    "-i",
+    options.audioPath,
+    "-map",
+    "0:v:0",
+    "-map",
+    "1:a:0",
+    "-c:v",
+    "copy",
+    "-c:a",
+    "copy",
+    "-shortest",
+    options.outputPath,
+  ];
+}
+
 export function getVisibleFfmpegOptions(): ExecaOptions {
   return { stdio: "inherit" };
 }
@@ -380,12 +410,24 @@ export async function runFinalFfmpegExport(
       execa("ffmpeg", args, getVisibleFfmpegOptions()).then(() => undefined));
   const logInfo = options.logInfo ?? console.info;
   const logWarn = options.logWarn ?? console.warn;
-  const hardwareEncoder = await detectHardwareEncoder();
   const finalArgsBase = {
     videoPath: options.videoPath,
     audioPath: options.audioPath,
     outputPath: options.outputPath,
+    videoBitrateKbps: options.videoBitrateKbps,
   };
+
+  logInfo("[FFmpeg] Attempting stream-copy final mux without re-encoding.");
+  try {
+    await runFfmpeg(buildFinalFfmpegCopyArgs(finalArgsBase));
+    return;
+  } catch {
+    logWarn(
+      "[FFmpeg] Stream-copy final mux failed. Falling back to GPU/CPU re-encode path.",
+    );
+  }
+
+  const hardwareEncoder = await detectHardwareEncoder();
 
   if (!hardwareEncoder) {
     logWarn(
@@ -471,6 +513,7 @@ export async function exportProject(options: {
     videoPath: videoOnlyPath,
     audioPath: concatAudioPath,
     outputPath,
+    videoBitrateKbps: options.project.exportConfig.videoBitrateKbps,
   });
   options.onProgress?.(1);
   return { outputPath };

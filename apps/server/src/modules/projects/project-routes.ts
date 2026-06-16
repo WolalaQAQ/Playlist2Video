@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type {FastifyInstance} from 'fastify';
-import {defaultThemeConfig, ExportConfigSchema, ThemeConfigSchema} from '@playlist2video/shared';
+import {defaultThemeConfig, ExportConfigPatchSchema, ExportConfigSchema, ThemeConfigPatchSchema, ThemeConfigSchema} from '@playlist2video/shared';
 import {z} from 'zod';
 import type {ServerConfig} from '../../config';
 import {data} from '../../lib/api-response';
@@ -15,8 +15,8 @@ const scanRequestSchema = z.object({folderPath: z.string().min(1)});
 const reorderRequestSchema = z.object({trackIds: z.array(z.string().min(1))});
 const updateTrackSchema = z.object({trackId: z.string().min(1), title: z.string().min(1).max(200), artist: z.string().min(1).max(200)});
 const updateSettingsSchema = z.object({
-  theme: ThemeConfigSchema.partial().optional(),
-  exportConfig: ExportConfigSchema.partial().optional(),
+  theme: ThemeConfigPatchSchema.optional(),
+  exportConfig: ExportConfigPatchSchema.optional(),
 });
 const mediaParamsSchema = z.object({trackId: z.string().min(1), kind: z.enum(['audio', 'cover'])});
 

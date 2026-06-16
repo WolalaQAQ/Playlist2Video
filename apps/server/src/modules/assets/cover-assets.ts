@@ -8,6 +8,8 @@ export interface WrittenCoverAsset {
   renderPath: string;
 }
 
+const embeddedCoverRenderSize = 768;
+
 export async function writeCoverAsset(options: {
   metadata: IAudioMetadata;
   assetsDir: string;
@@ -19,7 +21,10 @@ export async function writeCoverAsset(options: {
   await fs.mkdir(options.assetsDir, {recursive: true});
   const fileName = `${options.trackId}.jpg`;
   const outputPath = path.join(options.assetsDir, fileName);
-  await sharp(picture.data).resize(900, 900, {fit: 'cover'}).jpeg({quality: 90}).toFile(outputPath);
+  await sharp(picture.data)
+    .resize(embeddedCoverRenderSize, embeddedCoverRenderSize, {fit: 'cover'})
+    .jpeg({quality: 88})
+    .toFile(outputPath);
   return {filePath: outputPath, renderPath: fileName};
 }
 

@@ -83,7 +83,7 @@ export const SpectrumVisualizer: React.FC<{spectrumFrames?: number[][]; progress
   spectrumFrames,
   progress,
   energy,
-  bands = 96,
+  bands = 32,
 }) => {
   const sourceFrame = spectrumFrames?.length ? spectrumFrameAt(spectrumFrames, progress) : fallbackSpectrumFrame(48, progress, energy);
   const safeEnergy = clamp(energy);

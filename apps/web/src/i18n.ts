@@ -47,14 +47,17 @@ export const translations = {
       audioGroup: '音频导出设置',
       advancedGroup: '高级信息',
       effectIntensity: '效果强度',
-      intensityOptions: {low: '低', medium: '中', high: '高'},
+      intensityOptions: {minimal: '极简', low: '低', medium: '中', high: '高'},
       showParticles: '显示粒子',
       showPulseRings: '显示脉冲环',
       themeId: '主题 ID',
       width: '宽度',
       height: '高度',
       fps: 'FPS',
+      spectrumFps: '频谱 FPS',
+      renderQuality: '渲染质量',
       videoCodec: '视频编码',
+      videoBitrate: '视频码率',
       outputFileName: '输出文件名',
       audioCodec: '音频编码',
       audioBitrate: '音频码率',
@@ -74,6 +77,12 @@ export const translations = {
       audioChannelOptions: {
         1: '单声道',
         2: '立体声',
+      },
+      renderQualityOptions: {
+        high: '高质量',
+        balanced: '均衡',
+        fast: '快速',
+        minimal: '极简',
       },
       saveHint: '参数会保存到当前项目；点击“生成视频”刷新预览。',
       saving: '保存中...',
@@ -132,14 +141,17 @@ export const translations = {
       audioGroup: 'Audio export settings',
       advancedGroup: 'Advanced info',
       effectIntensity: 'Effect intensity',
-      intensityOptions: {low: 'Low', medium: 'Medium', high: 'High'},
+      intensityOptions: {minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High'},
       showParticles: 'Show particles',
       showPulseRings: 'Show pulse rings',
       themeId: 'Theme ID',
       width: 'Width',
       height: 'Height',
       fps: 'FPS',
+      spectrumFps: 'Spectrum FPS',
+      renderQuality: 'Render quality',
       videoCodec: 'Video codec',
+      videoBitrate: 'Video bitrate',
       outputFileName: 'Output file name',
       audioCodec: 'Audio codec',
       audioBitrate: 'Audio bitrate',
@@ -159,6 +171,12 @@ export const translations = {
       audioChannelOptions: {
         1: 'Mono',
         2: 'Stereo',
+      },
+      renderQualityOptions: {
+        high: 'High quality',
+        balanced: 'Balanced',
+        fast: 'Fast',
+        minimal: 'Minimal',
       },
       saveHint: 'Settings are saved to the current project. Click Generate video to refresh the preview.',
       saving: 'Saving...',
@@ -217,14 +235,17 @@ export const translations = {
     audioGroup: string;
     advancedGroup: string;
     effectIntensity: string;
-    intensityOptions: {low: string; medium: string; high: string};
+    intensityOptions: {minimal: string; low: string; medium: string; high: string};
     showParticles: string;
     showPulseRings: string;
     themeId: string;
     width: string;
     height: string;
     fps: string;
+    spectrumFps: string;
+    renderQuality: string;
     videoCodec: string;
+    videoBitrate: string;
     outputFileName: string;
     audioCodec: string;
     audioBitrate: string;
@@ -234,6 +255,7 @@ export const translations = {
     audioBitrateOptions: Record<128 | 192 | 256 | 320, string>;
     audioSampleRateOptions: Record<44100 | 48000, string>;
     audioChannelOptions: Record<1 | 2, string>;
+    renderQualityOptions: Record<'high' | 'balanced' | 'fast' | 'minimal', string>;
     saveHint: string;
     saving: string;
     saved: string;

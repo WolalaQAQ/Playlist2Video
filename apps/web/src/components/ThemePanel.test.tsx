@@ -17,6 +17,9 @@ const project: Project = {
     height: 1080,
     fps: 30,
     videoCodec: 'h264',
+    videoBitrateKbps: 12000,
+    spectrumFps: 10,
+    renderQuality: 'fast',
     outputFileName: 'playlist-video.mp4',
     audioCodec: 'aac',
     audioBitrateKbps: 320,
@@ -37,7 +40,10 @@ it('shows the current theme and export settings', () => {
   expect(screen.getByLabelText('Show pulse rings')).toBeChecked();
   expect(screen.getByLabelText('Width')).toHaveValue(1920);
   expect(screen.getByLabelText('Height')).toHaveValue(1080);
-  expect(screen.getByLabelText('FPS')).toHaveValue('30');
+  expect(screen.getByLabelText('FPS')).toHaveValue(30);
+  expect(screen.getByLabelText('Spectrum FPS')).toHaveValue(10);
+  expect(screen.getByLabelText('Render quality')).toHaveValue('fast');
+  expect(screen.getByLabelText('Video bitrate')).toHaveValue(12000);
   expect(screen.getByLabelText('Output file name')).toHaveValue('playlist-video.mp4');
   expect(screen.getByLabelText('Audio codec')).toHaveValue('aac');
   expect(screen.getByLabelText('Audio bitrate')).toHaveValue('320');
@@ -71,7 +77,16 @@ it('saves export settings from the panel controls', async () => {
   await user.clear(screen.getByLabelText('Height'));
   await user.type(screen.getByLabelText('Height'), '720');
   await user.tab();
-  await user.selectOptions(screen.getByLabelText('FPS'), '24');
+  await user.clear(screen.getByLabelText('FPS'));
+  await user.type(screen.getByLabelText('FPS'), '24');
+  await user.tab();
+  await user.clear(screen.getByLabelText('Spectrum FPS'));
+  await user.type(screen.getByLabelText('Spectrum FPS'), '8');
+  await user.tab();
+  await user.selectOptions(screen.getByLabelText('Render quality'), 'minimal');
+  await user.clear(screen.getByLabelText('Video bitrate'));
+  await user.type(screen.getByLabelText('Video bitrate'), '8000');
+  await user.tab();
   await user.clear(screen.getByLabelText('Output file name'));
   await user.type(screen.getByLabelText('Output file name'), 'custom-playlist.mp4');
   await user.tab();
@@ -79,6 +94,9 @@ it('saves export settings from the panel controls', async () => {
   expect(onUpdateSettings).toHaveBeenCalledWith({exportConfig: {width: 1280}});
   expect(onUpdateSettings).toHaveBeenCalledWith({exportConfig: {height: 720}});
   expect(onUpdateSettings).toHaveBeenCalledWith({exportConfig: {fps: 24}});
+  expect(onUpdateSettings).toHaveBeenCalledWith({exportConfig: {spectrumFps: 8}});
+  expect(onUpdateSettings).toHaveBeenCalledWith({exportConfig: {renderQuality: 'minimal'}});
+  expect(onUpdateSettings).toHaveBeenCalledWith({exportConfig: {videoBitrateKbps: 8000}});
   expect(onUpdateSettings).toHaveBeenCalledWith({exportConfig: {outputFileName: 'custom-playlist.mp4'}});
 });
 

@@ -4,15 +4,18 @@ import type {Translation} from '../i18n';
 
 type SettingsPatch = {theme?: Partial<ThemeConfig>; exportConfig?: Partial<ExportConfig>};
 
-const fpsOptions = [24, 30, 60] as const;
 const audioBitrateOptions = [128, 192, 256, 320] as const;
 const audioSampleRateOptions = [44100, 48000] as const;
 const audioChannelOptions = [1, 2] as const;
+const renderQualityOptions: ExportConfig['renderQuality'][] = ['high', 'balanced', 'fast', 'minimal'];
 const defaultExportConfig: ExportConfig = {
   width: 1920,
   height: 1080,
   fps: 30,
   videoCodec: 'h264',
+  videoBitrateKbps: 12000,
+  spectrumFps: 30,
+  renderQuality: 'high',
   outputFileName: 'playlist-video.mp4',
   audioCodec: 'aac',
   audioBitrateKbps: 320,
@@ -46,7 +49,7 @@ export const ThemePanel: React.FC<{
     }
   }
 
-  async function savePositiveNumber(kind: 'width' | 'height', value: string) {
+  async function savePositiveNumber(kind: 'width' | 'height' | 'fps' | 'spectrumFps' | 'videoBitrateKbps', value: string) {
     const nextValue = Number(value);
     if (!Number.isInteger(nextValue) || nextValue <= 0 || nextValue === exportConfig[kind]) return;
     await save({exportConfig: {[kind]: nextValue}});
@@ -91,6 +94,7 @@ export const ThemePanel: React.FC<{
             value={theme.effectIntensity}
             onChange={(event) => void save({theme: {effectIntensity: event.currentTarget.value as ThemeConfig['effectIntensity']}})}
           >
+            <option value="minimal">{copy.intensityOptions.minimal}</option>
             <option value="low">{copy.intensityOptions.low}</option>
             <option value="medium">{copy.intensityOptions.medium}</option>
             <option value="high">{copy.intensityOptions.high}</option>
@@ -206,18 +210,57 @@ export const ThemePanel: React.FC<{
           </label>
           <label className="control-row">
             <span>{copy.fps}</span>
-            <select
+            <input
               aria-label={copy.fps}
+              defaultValue={exportConfig.fps}
               disabled={disabled}
-              value={exportConfig.fps}
-              onChange={(event) => void save({exportConfig: {fps: Number(event.currentTarget.value)}})}
+              inputMode="numeric"
+              min={1}
+              type="number"
+              onBlur={(event) => void savePositiveNumber('fps', event.currentTarget.value)}
+              key={`fps-${exportConfig.fps}`}
+            />
+          </label>
+          <label className="control-row">
+            <span>{copy.spectrumFps}</span>
+            <input
+              aria-label={copy.spectrumFps}
+              defaultValue={exportConfig.spectrumFps}
+              disabled={disabled}
+              inputMode="numeric"
+              min={1}
+              type="number"
+              onBlur={(event) => void savePositiveNumber('spectrumFps', event.currentTarget.value)}
+              key={`spectrum-fps-${exportConfig.spectrumFps}`}
+            />
+          </label>
+          <label className="control-row">
+            <span>{copy.renderQuality}</span>
+            <select
+              aria-label={copy.renderQuality}
+              disabled={disabled}
+              value={exportConfig.renderQuality}
+              onChange={(event) => void save({exportConfig: {renderQuality: event.currentTarget.value as ExportConfig['renderQuality']}})}
             >
-              {fpsOptions.map((fps) => <option key={fps} value={fps}>{fps}</option>)}
+              {renderQualityOptions.map((quality) => <option key={quality} value={quality}>{copy.renderQualityOptions[quality]}</option>)}
             </select>
           </label>
           <label className="control-row">
             <span>{copy.videoCodec}</span>
             <input aria-label={copy.videoCodec} disabled readOnly value={exportConfig.videoCodec} />
+          </label>
+          <label className="control-row">
+            <span>{copy.videoBitrate}</span>
+            <input
+              aria-label={copy.videoBitrate}
+              defaultValue={exportConfig.videoBitrateKbps}
+              disabled={disabled}
+              inputMode="numeric"
+              min={1}
+              type="number"
+              onBlur={(event) => void savePositiveNumber('videoBitrateKbps', event.currentTarget.value)}
+              key={`video-bitrate-${exportConfig.videoBitrateKbps}`}
+            />
           </label>
         </div>
         <label className="control-row wide">

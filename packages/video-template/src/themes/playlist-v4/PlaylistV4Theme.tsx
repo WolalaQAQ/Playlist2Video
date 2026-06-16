@@ -22,7 +22,11 @@ export const PlaylistV4Theme: React.FC<PlaylistVideoProps> = ({project}) => {
   const index = currentTrack ? timeline.findIndex((track) => track.id === currentTrack.id) : 0;
   const localTime = currentTrack ? currentTime - currentTrack.startSeconds : 0;
   const progress = currentTrack ? Math.max(0, Math.min(1, localTime / currentTrack.durationSeconds)) : 0;
-  const energyProfile = getSpectrumEnergyProfile({spectrumFrames: currentTrack?.spectrumFrames, progress});
+  const spectrumFps = Math.max(1, Math.min(project.exportConfig.fps, project.exportConfig.spectrumFps));
+  const quantizedLocalTime = Math.floor(localTime * spectrumFps) / spectrumFps;
+  const spectrumProgress = currentTrack ? Math.max(0, Math.min(1, quantizedLocalTime / currentTrack.durationSeconds)) : 0;
+  const renderQuality = project.exportConfig.renderQuality;
+  const energyProfile = getSpectrumEnergyProfile({spectrumFrames: currentTrack?.spectrumFrames, progress: spectrumProgress});
   const audioTracks = timeline.filter((track) => track.audioPreviewUrl);
 
   if (!currentTrack) return <div className="p2v-root p2v-empty">No tracks loaded</div>;
@@ -31,7 +35,7 @@ export const PlaylistV4Theme: React.FC<PlaylistVideoProps> = ({project}) => {
 
   return (
     <div
-      className="p2v-root"
+      className={`p2v-root p2v-quality-${renderQuality}`}
       style={
         {
           '--effect-energy': energyProfile.overall.toFixed(3),
@@ -48,7 +52,7 @@ export const PlaylistV4Theme: React.FC<PlaylistVideoProps> = ({project}) => {
         </Sequence>
       ))}
       <div className="p2v-bg" />
-      <BeatEffects energyProfile={energyProfile} config={project.theme} />
+      <BeatEffects energyProfile={energyProfile} config={project.theme} renderQuality={renderQuality} />
       <main className="p2v-layout">
         <section className="p2v-now">
           <div className="p2v-cover-wrap">
@@ -67,7 +71,7 @@ export const PlaylistV4Theme: React.FC<PlaylistVideoProps> = ({project}) => {
         </section>
         <PlaylistPanel timeline={timeline} currentTrackId={currentTrack.id} totalDurationSeconds={totalDurationSeconds} />
       </main>
-      <SpectrumVisualizer spectrumFrames={currentTrack.spectrumFrames} progress={progress} energy={energyProfile.overall} />
+      <SpectrumVisualizer spectrumFrames={currentTrack.spectrumFrames} progress={spectrumProgress} energy={energyProfile.overall} />
     </div>
   );
 };
