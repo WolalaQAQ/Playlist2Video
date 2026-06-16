@@ -7,6 +7,8 @@ import {PlaylistVideo, type PlaylistVideoProps} from './PlaylistVideo';
 const defaultFps = 30;
 export const PlaylistVideoSchema = z.object({
   project: ProjectSchema,
+  renderMode: z.enum(['video', 'static-image']).optional(),
+  stillTrackId: z.string().optional(),
 });
 
 const calculateMetadata: CalculateMetadataFunction<PlaylistVideoProps> = ({props}) => {
@@ -45,5 +47,3 @@ export const RemotionRoot: React.FC = () => (
     schema={PlaylistVideoSchema}
   />
 );
-
-

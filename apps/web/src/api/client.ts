@@ -32,3 +32,7 @@ function stripHeavyTrackData(project: Project): Project {
 
 export const exportCurrentProject = (project?: Project) =>
   request<{outputPath: string}>('/exports', project ? {method: 'POST', body: JSON.stringify({project: stripHeavyTrackData(project)})} : {method: 'POST'});
+
+
+export const exportCurrentProjectStills = (project?: Project) =>
+  request<{outputDir: string; files: {trackId: string; title: string; outputPath: string}[]}>('/exports/stills', project ? {method: 'POST', body: JSON.stringify({project: stripHeavyTrackData(project)})} : {method: 'POST'});
