@@ -40,8 +40,12 @@ export interface RunFinalFfmpegExportOptions {
   logWarn?: (message: string) => void;
 }
 
-type RenderVideoOnlyForExport = (options: RenderProjectVideoOnlyOptions) => Promise<void>;
-type FinalFfmpegExportForExport = (options: RunFinalFfmpegExportOptions) => Promise<void>;
+type RenderVideoOnlyForExport = (
+  options: RenderProjectVideoOnlyOptions,
+) => Promise<void>;
+type FinalFfmpegExportForExport = (
+  options: RunFinalFfmpegExportOptions,
+) => Promise<void>;
 
 type PrepareRemotionServerOptions = Parameters<
   typeof RenderInternals.prepareServer
@@ -81,6 +85,26 @@ const h264HardwareEncoderPriority: H264HardwareEncoder[] = [
   "h264_qsv",
   "h264_amf",
 ];
+
+export function formatDuration(milliseconds: number): string {
+  return `${(milliseconds / 1000).toFixed(2)}s`;
+}
+
+export async function timeAsyncStep<T>(
+  label: string,
+  step: () => Promise<T>,
+  logInfo: (message: string) => void = console.info,
+  now: () => number = () => performance.now(),
+): Promise<T> {
+  const startedAt = now();
+  try {
+    return await step();
+  } finally {
+    logInfo(
+      `[Timing] ${label} completed in ${formatDuration(now() - startedAt)}`,
+    );
+  }
+}
 
 export function escapeFfmpegConcatPath(filePath: string): string {
   return filePath.replaceAll("'", "'\\''");
@@ -155,45 +179,48 @@ export async function renderProjectVideoOnly(
   const frameImageFormat =
     options.project.exportConfig.frameImageFormat ?? "jpeg";
   const jpegQuality = options.project.exportConfig.jpegQuality ?? 100;
-  const bundledServeUrl = await bundleRemotion({
-    entryPoint: getRemotionEntryPoint(),
-    outDir: bundleDir,
-    publicDir: path.join(options.workspaceDir, "assets"),
-  });
+  const bundledServeUrl = await timeAsyncStep("Remotion bundle", () =>
+    bundleRemotion({
+      entryPoint: getRemotionEntryPoint(),
+      outDir: bundleDir,
+      publicDir: path.join(options.workspaceDir, "assets"),
+    }),
+  );
   const server = await startBundleServer({
     bundleDir: bundledServeUrl,
     sampleRate: options.project.exportConfig.audioSampleRate,
   });
 
   try {
-    const composition = await selectCompositionFn({
-      serveUrl: server.serveUrl,
-      id: "PlaylistVideo",
-      inputProps: { project: renderProject },
-    });
-    await renderMediaFn({
-      composition,
-      serveUrl: server.serveUrl,
-      codec: options.project.exportConfig.videoCodec,
-      imageFormat: frameImageFormat,
-      ...(frameImageFormat === "jpeg"
-        ? { jpegQuality }
-        : {}),
-      hardwareAcceleration: "if-possible",
-      disallowParallelEncoding: false,
-      concurrency: 4,
-      videoBitrate: `${options.project.exportConfig.videoBitrateKbps}k`,
-      outputLocation: options.videoOnlyPath,
-      inputProps: { project: renderProject },
-      onProgress: ({ progress }) => {
-        const exportProgress = 0.2 + progress * 0.6;
-        options.onProgress?.(exportProgress);
-        process.stdout.write(
-          `\r[Remotion] Rendering video ${(exportProgress * 100).toFixed(1)}%`,
-        );
-        if (progress >= 1) process.stdout.write("\n");
-      },
-    });
+    const composition = await timeAsyncStep("Remotion select composition", () =>
+      selectCompositionFn({
+        serveUrl: server.serveUrl,
+        id: "PlaylistVideo",
+        inputProps: { project: renderProject },
+      }),
+    );
+    await timeAsyncStep("Remotion render video", () =>
+      renderMediaFn({
+        composition,
+        serveUrl: server.serveUrl,
+        codec: options.project.exportConfig.videoCodec,
+        imageFormat: frameImageFormat,
+        ...(frameImageFormat === "jpeg" ? { jpegQuality } : {}),
+        hardwareAcceleration: "if-possible",
+        disallowParallelEncoding: false,
+        concurrency: 4,
+        videoBitrate: `${options.project.exportConfig.videoBitrateKbps}k`,
+        outputLocation: options.videoOnlyPath,
+        inputProps: { project: renderProject },
+        onProgress: ({ progress }) => {
+          options.onProgress?.(progress);
+          process.stdout.write(
+            `\r[Remotion] Rendering video ${(progress * 100).toFixed(1)}%`,
+          );
+          if (progress >= 1) process.stdout.write("\n");
+        },
+      }),
+    );
   } finally {
     await server.close(false);
   }
@@ -202,7 +229,7 @@ export async function renderProjectVideoOnly(
 export function prepareProjectForRemotionRender(project: Project): Project {
   return {
     ...project,
-    tracks: project.tracks.map((track) => ({...track})),
+    tracks: project.tracks.map((track) => ({ ...track })),
   };
 }
 
@@ -483,11 +510,13 @@ export async function exportProject(options: {
     console.info(
       "[FFmpeg] Concatenating playlist audio. FFmpeg progress is shown below.",
     );
-    await runFfmpeg(
-      buildAudioFfmpegArgs(
-        concatListPath,
-        concatAudioPath,
-        options.project.exportConfig,
+    await timeAsyncStep("FFmpeg audio concat/transcode", () =>
+      runFfmpeg(
+        buildAudioFfmpegArgs(
+          concatListPath,
+          concatAudioPath,
+          options.project.exportConfig,
+        ),
       ),
     );
     options.onProgress?.(0.2);
@@ -503,17 +532,21 @@ export async function exportProject(options: {
     console.info(
       "[FFmpeg] Combining video and audio. Attempting GPU acceleration when available.",
     );
-    await finalFfmpegExport({
-      videoPath: videoOnlyPath,
-      audioPath: concatAudioPath,
-      outputPath,
-      videoBitrateKbps: options.project.exportConfig.videoBitrateKbps,
-    });
+    await timeAsyncStep("Final mux/re-encode", () =>
+      finalFfmpegExport({
+        videoPath: videoOnlyPath,
+        audioPath: concatAudioPath,
+        outputPath,
+        videoBitrateKbps: options.project.exportConfig.videoBitrateKbps,
+      }),
+    );
     options.onProgress?.(1);
     return { outputPath };
   } finally {
     if (!options.keepTempFiles) {
-      await fs.rm(tempDir, {recursive: true, force: true});
+      await timeAsyncStep("Temp cleanup", () =>
+        fs.rm(tempDir, { recursive: true, force: true }),
+      );
     }
   }
 }
