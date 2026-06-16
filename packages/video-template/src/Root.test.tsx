@@ -57,6 +57,8 @@ const project: Project = {
     videoBitrateKbps: 12000,
     spectrumFps: 30,
     renderQuality: 'high',
+    frameImageFormat: 'jpeg',
+    jpegQuality: 100,
     outputFileName: 'playlist-video.mp4',
     audioCodec: 'aac',
     audioBitrateKbps: 320,

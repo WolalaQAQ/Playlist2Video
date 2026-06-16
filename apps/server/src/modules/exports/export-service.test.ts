@@ -190,10 +190,56 @@ it("renders Remotion through one stable IPv4 bundle server", async () => {
   expect(renderedServeUrls).toEqual(["http://127.0.0.1:3000/"]);
   expect(renderOptions[0]).toMatchObject({
     disallowParallelEncoding: false,
+    imageFormat: "jpeg",
+    jpegQuality: 100,
     videoBitrate: "12000k",
   });
   expect(renderOptions[0]).toHaveProperty("concurrency");
   expect(closed).toEqual([false]);
+});
+
+it("passes PNG intermediate frame settings to Remotion without JPEG quality", async () => {
+  const project = createTestProject();
+  project.exportConfig = {
+    ...project.exportConfig,
+    frameImageFormat: "png",
+    jpegQuality: 92,
+  };
+  let renderOptions: unknown = null;
+
+  await renderProjectVideoOnly({
+    project,
+    workspaceDir: "C:/workspace",
+    tempDir: "C:/workspace/.tmp/export-123",
+    videoOnlyPath: "C:/workspace/.tmp/export-123/video.mp4",
+    bundleRemotion: async (options) => String(options.outDir),
+    startBundleServer: async () => ({
+      serveUrl: "http://127.0.0.1:3000/",
+      close: async () => undefined,
+    }),
+    selectCompositionFn: async () => ({
+      id: "PlaylistVideo",
+      width: project.exportConfig.width,
+      height: project.exportConfig.height,
+      fps: project.exportConfig.fps,
+      durationInFrames: 30,
+      props: {},
+      defaultProps: {},
+      defaultCodec: null,
+      defaultOutName: null,
+      defaultVideoImageFormat: null,
+      defaultPixelFormat: null,
+      defaultProResProfile: null,
+      defaultSampleRate: null,
+    }),
+    renderMediaFn: async (options) => {
+      renderOptions = options;
+      return { buffer: null, slowestFrames: [], contentType: "video/mp4" };
+    },
+  });
+
+  expect(renderOptions).toMatchObject({ imageFormat: "png" });
+  expect(renderOptions).not.toHaveProperty("jpegQuality");
 });
 
 it("cleans temporary export files by default after a successful export", async () => {
@@ -262,6 +308,8 @@ it("maps only audio during FFmpeg concat so embedded MP3 cover art is not encode
     videoBitrateKbps: 12000,
     spectrumFps: 30,
     renderQuality: "high",
+    frameImageFormat: 'jpeg',
+    jpegQuality: 100,
     outputFileName: "playlist-video.mp4",
     audioCodec: "aac",
     audioBitrateKbps: 320,
@@ -292,6 +340,8 @@ it("builds FFmpeg audio concat arguments from export settings", () => {
     videoBitrateKbps: 12000,
     spectrumFps: 30,
     renderQuality: "high",
+    frameImageFormat: 'jpeg',
+    jpegQuality: 100,
     outputFileName: "playlist-video.mp4",
     audioCodec: "aac",
     audioBitrateKbps: 256,
@@ -683,6 +733,8 @@ function createTestProject(): Project {
       videoBitrateKbps: 12000,
       spectrumFps: 30,
       renderQuality: "high",
+      frameImageFormat: 'jpeg',
+      jpegQuality: 100,
       outputFileName: "playlist-video.mp4",
       audioCodec: "aac",
       audioBitrateKbps: 320,

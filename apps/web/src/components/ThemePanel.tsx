@@ -8,6 +8,7 @@ const audioBitrateOptions = [128, 192, 256, 320] as const;
 const audioSampleRateOptions = [44100, 48000] as const;
 const audioChannelOptions = [1, 2] as const;
 const renderQualityOptions: ExportConfig['renderQuality'][] = ['high', 'balanced', 'fast', 'minimal'];
+const frameImageFormatOptions: ExportConfig['frameImageFormat'][] = ['jpeg', 'png'];
 const defaultExportConfig: ExportConfig = {
   width: 1920,
   height: 1080,
@@ -16,6 +17,8 @@ const defaultExportConfig: ExportConfig = {
   videoBitrateKbps: 12000,
   spectrumFps: 30,
   renderQuality: 'high',
+  frameImageFormat: 'jpeg',
+  jpegQuality: 100,
   outputFileName: 'playlist-video.mp4',
   audioCodec: 'aac',
   audioBitrateKbps: 320,
@@ -59,6 +62,12 @@ export const ThemePanel: React.FC<{
     const nextValue = Number(value);
     if (!Number.isInteger(nextValue) || nextValue < 1 || nextValue > 200 || nextValue === exportConfig.audioVolumePercent) return;
     await save({exportConfig: {audioVolumePercent: nextValue}});
+  }
+
+  async function saveJpegQuality(value: string) {
+    const nextValue = Number(value);
+    if (!Number.isInteger(nextValue) || nextValue < 0 || nextValue > 100 || nextValue === exportConfig.jpegQuality) return;
+    await save({exportConfig: {jpegQuality: nextValue}});
   }
 
   async function saveOutputFileName(value: string) {
@@ -244,6 +253,31 @@ export const ThemePanel: React.FC<{
             >
               {renderQualityOptions.map((quality) => <option key={quality} value={quality}>{copy.renderQualityOptions[quality]}</option>)}
             </select>
+          </label>
+          <label className="control-row">
+            <span>{copy.frameImageFormat}</span>
+            <select
+              aria-label={copy.frameImageFormat}
+              disabled={disabled}
+              value={exportConfig.frameImageFormat}
+              onChange={(event) => void save({exportConfig: {frameImageFormat: event.currentTarget.value as ExportConfig['frameImageFormat']}})}
+            >
+              {frameImageFormatOptions.map((format) => <option key={format} value={format}>{copy.frameImageFormatOptions[format]}</option>)}
+            </select>
+          </label>
+          <label className="control-row">
+            <span>{copy.jpegQuality}</span>
+            <input
+              aria-label={copy.jpegQuality}
+              defaultValue={exportConfig.jpegQuality}
+              disabled={disabled || exportConfig.frameImageFormat === 'png'}
+              inputMode="numeric"
+              min={0}
+              max={100}
+              type="number"
+              onBlur={(event) => void saveJpegQuality(event.currentTarget.value)}
+              key={`jpeg-quality-${exportConfig.frameImageFormat}-${exportConfig.jpegQuality}`}
+            />
           </label>
           <label className="control-row">
             <span>{copy.videoCodec}</span>

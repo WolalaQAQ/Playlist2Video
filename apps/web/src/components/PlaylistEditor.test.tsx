@@ -28,7 +28,7 @@ const project: Project = {
   sourceFolder: 'C:/Music',
   tracks: [track('track-1', 'Alpha', 0), track('track-2', 'Beta', 1), track('track-3', 'Gamma', 2)],
   theme: {themeId: 'playlist-v4', effectIntensity: 'high', showParticles: true, showPulseRings: true, playlistPanelMode: 'full'},
-  exportConfig: {width: 1920, height: 1080, fps: 30, videoCodec: 'h264', videoBitrateKbps: 12000, spectrumFps: 30, renderQuality: 'high', outputFileName: 'playlist-video.mp4', audioCodec: 'aac', audioBitrateKbps: 320, audioSampleRate: 48000, audioChannels: 2, audioVolumePercent: 100},
+  exportConfig: {width: 1920, height: 1080, fps: 30, videoCodec: 'h264', videoBitrateKbps: 12000, spectrumFps: 30, renderQuality: 'high', frameImageFormat: 'jpeg', jpegQuality: 100, outputFileName: 'playlist-video.mp4', audioCodec: 'aac', audioBitrateKbps: 320, audioSampleRate: 48000, audioChannels: 2, audioVolumePercent: 100},
   createdAt: new Date(0).toISOString(),
   updatedAt: new Date(0).toISOString(),
 };

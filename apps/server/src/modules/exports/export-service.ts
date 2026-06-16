@@ -152,6 +152,9 @@ export async function renderProjectVideoOnly(
   const renderMediaFn = options.renderMediaFn ?? renderMedia;
   const bundleDir = path.join(options.tempDir, "remotion-bundle");
   const renderProject = prepareProjectForRemotionRender(options.project);
+  const frameImageFormat =
+    options.project.exportConfig.frameImageFormat ?? "jpeg";
+  const jpegQuality = options.project.exportConfig.jpegQuality ?? 100;
   const bundledServeUrl = await bundleRemotion({
     entryPoint: getRemotionEntryPoint(),
     outDir: bundleDir,
@@ -172,6 +175,10 @@ export async function renderProjectVideoOnly(
       composition,
       serveUrl: server.serveUrl,
       codec: options.project.exportConfig.videoCodec,
+      imageFormat: frameImageFormat,
+      ...(frameImageFormat === "jpeg"
+        ? { jpegQuality }
+        : {}),
       hardwareAcceleration: "if-possible",
       disallowParallelEncoding: false,
       concurrency: 4,

@@ -56,6 +56,8 @@ export const translations = {
       fps: 'FPS',
       spectrumFps: '频谱 FPS',
       renderQuality: '渲染质量',
+      frameImageFormat: '中间帧格式',
+      jpegQuality: 'JPEG 帧质量',
       videoCodec: '视频编码',
       videoBitrate: '视频码率',
       outputFileName: '输出文件名',
@@ -83,6 +85,10 @@ export const translations = {
         balanced: '均衡',
         fast: '快速',
         minimal: '极简',
+      },
+      frameImageFormatOptions: {
+        jpeg: 'JPEG',
+        png: 'PNG',
       },
       saveHint: '参数会保存到当前项目；点击“生成视频”刷新预览。',
       saving: '保存中...',
@@ -152,6 +158,8 @@ export const translations = {
       fps: 'FPS',
       spectrumFps: 'Spectrum FPS',
       renderQuality: 'Render quality',
+      frameImageFormat: 'Intermediate frame format',
+      jpegQuality: 'JPEG frame quality',
       videoCodec: 'Video codec',
       videoBitrate: 'Video bitrate',
       outputFileName: 'Output file name',
@@ -179,6 +187,10 @@ export const translations = {
         balanced: 'Balanced',
         fast: 'Fast',
         minimal: 'Minimal',
+      },
+      frameImageFormatOptions: {
+        jpeg: 'JPEG',
+        png: 'PNG',
       },
       saveHint: 'Settings are saved to the current project. Click Generate video to refresh the preview.',
       saving: 'Saving...',
@@ -248,6 +260,8 @@ export const translations = {
     fps: string;
     spectrumFps: string;
     renderQuality: string;
+    frameImageFormat: string;
+    jpegQuality: string;
     videoCodec: string;
     videoBitrate: string;
     outputFileName: string;
@@ -260,6 +274,7 @@ export const translations = {
     audioSampleRateOptions: Record<44100 | 48000, string>;
     audioChannelOptions: Record<1 | 2, string>;
     renderQualityOptions: Record<'high' | 'balanced' | 'fast' | 'minimal', string>;
+    frameImageFormatOptions: Record<'jpeg' | 'png', string>;
     saveHint: string;
     saving: string;
     saved: string;

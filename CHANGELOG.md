@@ -1,3 +1,21 @@
+## [0.1.12] - 2026-06-17
+
+### Features
+
+- Changed Remotion intermediate video frames to default to JPEG at quality 100 instead of Remotion's JPEG quality 80 default.
+- Added export settings for intermediate frame format (`jpeg` or `png`) and JPEG frame quality in the parameter panel.
+- Passed the selected intermediate frame format and JPEG quality into Remotion `renderMedia`, omitting JPEG quality for PNG renders.
+
+### Design Rationale
+
+- Benchmarking showed JPEG 100 gives visibly cleaner text/gradients than JPEG 80 with a modest render-time increase, while PNG is much slower and uses far larger temporary frame data.
+- Remotion's stable video intermediate frame API supports `jpeg`, `png`, or `none`; the UI exposes the practical image choices while preserving H.264 MP4 output behavior.
+
+### Notes & Caveats
+
+- PNG intermediate frames are lossless but can substantially increase render time and temporary disk usage.
+- Existing projects without these settings load with `frameImageFormat: jpeg` and `jpegQuality: 100`.
+
 ## [0.1.11] - 2026-06-16
 
 ### Fixes

@@ -16,6 +16,21 @@ it('defaults spectrum rendering to full-rate high quality for compatibility', ()
   });
 });
 
+it('defaults Remotion intermediate frames to JPEG 100 for cleaner exports', () => {
+  expect(ExportConfigSchema.parse({})).toMatchObject({
+    frameImageFormat: 'jpeg',
+    jpegQuality: 100,
+  });
+});
+
+it('allows PNG intermediate frames and validates JPEG quality bounds', () => {
+  expect(ExportConfigSchema.parse({frameImageFormat: 'png', jpegQuality: 90})).toMatchObject({
+    frameImageFormat: 'png',
+    jpegQuality: 90,
+  });
+  expect(() => ExportConfigSchema.parse({jpegQuality: 101})).toThrow();
+});
+
 it('allows a minimal visual effect intensity preset', () => {
   expect(ThemeConfigSchema.parse({themeId: 'playlist-v4', effectIntensity: 'minimal'}).effectIntensity).toBe('minimal');
 });

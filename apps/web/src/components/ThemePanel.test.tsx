@@ -20,6 +20,8 @@ const project: Project = {
     videoBitrateKbps: 12000,
     spectrumFps: 10,
     renderQuality: 'fast',
+    frameImageFormat: 'jpeg',
+    jpegQuality: 100,
     outputFileName: 'playlist-video.mp4',
     audioCodec: 'aac',
     audioBitrateKbps: 320,
@@ -43,6 +45,8 @@ it('shows the current theme and export settings', () => {
   expect(screen.getByLabelText('FPS')).toHaveValue(30);
   expect(screen.getByLabelText('Spectrum FPS')).toHaveValue(10);
   expect(screen.getByLabelText('Render quality')).toHaveValue('fast');
+  expect(screen.getByLabelText('Intermediate frame format')).toHaveValue('jpeg');
+  expect(screen.getByLabelText('JPEG frame quality')).toHaveValue(100);
   expect(screen.getByLabelText('Video bitrate')).toHaveValue(12000);
   expect(screen.getByLabelText('Output file name')).toHaveValue('playlist-video.mp4');
   expect(screen.getByLabelText('Audio codec')).toHaveValue('aac');
@@ -84,6 +88,10 @@ it('saves export settings from the panel controls', async () => {
   await user.type(screen.getByLabelText('Spectrum FPS'), '8');
   await user.tab();
   await user.selectOptions(screen.getByLabelText('Render quality'), 'minimal');
+  await user.selectOptions(screen.getByLabelText('Intermediate frame format'), 'png');
+  await user.clear(screen.getByLabelText('JPEG frame quality'));
+  await user.type(screen.getByLabelText('JPEG frame quality'), '95');
+  await user.tab();
   await user.clear(screen.getByLabelText('Video bitrate'));
   await user.type(screen.getByLabelText('Video bitrate'), '8000');
   await user.tab();
@@ -96,6 +104,8 @@ it('saves export settings from the panel controls', async () => {
   expect(onUpdateSettings).toHaveBeenCalledWith({exportConfig: {fps: 24}});
   expect(onUpdateSettings).toHaveBeenCalledWith({exportConfig: {spectrumFps: 8}});
   expect(onUpdateSettings).toHaveBeenCalledWith({exportConfig: {renderQuality: 'minimal'}});
+  expect(onUpdateSettings).toHaveBeenCalledWith({exportConfig: {frameImageFormat: 'png'}});
+  expect(onUpdateSettings).toHaveBeenCalledWith({exportConfig: {jpegQuality: 95}});
   expect(onUpdateSettings).toHaveBeenCalledWith({exportConfig: {videoBitrateKbps: 8000}});
   expect(onUpdateSettings).toHaveBeenCalledWith({exportConfig: {outputFileName: 'custom-playlist.mp4'}});
 });
@@ -124,6 +134,21 @@ it('disables controls until a project is loaded', () => {
   expect(screen.getByLabelText('Effect intensity')).toBeDisabled();
   expect(screen.getByLabelText('Width')).toBeDisabled();
   expect(screen.getByLabelText('Audio bitrate')).toHaveValue('320');
+  expect(screen.getByLabelText('Intermediate frame format')).toHaveValue('jpeg');
+  expect(screen.getByLabelText('JPEG frame quality')).toHaveValue(100);
   expect(screen.getByText('Scan a folder to enable parameter controls.')).toBeInTheDocument();
+});
+
+it('disables JPEG quality input while PNG intermediate frames are selected', () => {
+  render(
+    <ThemePanel
+      copy={translations.en.theme}
+      project={{...project, exportConfig: {...project.exportConfig, frameImageFormat: 'png'}}}
+      onUpdateSettings={vi.fn()}
+    />,
+  );
+
+  expect(screen.getByLabelText('Intermediate frame format')).toHaveValue('png');
+  expect(screen.getByLabelText('JPEG frame quality')).toBeDisabled();
 });
 
