@@ -406,8 +406,7 @@ export function buildVideoChunkConcatFallbackArgs(options: {
     "-an",
     "-c:v",
     "libx264",
-    "-b:v",
-    `${options.videoBitrateKbps}k`,
+    ...buildConstantVideoBitrateArgs("libx264", options.videoBitrateKbps),
     "-preset",
     "medium",
     "-pix_fmt",
@@ -804,6 +803,7 @@ export async function renderProjectVideoOnly(
     prepareForcedNvencBinariesDirectory:
       options.prepareForcedNvencBinariesDirectory,
     targetDir: path.join(options.tempDir, "remotion-nvenc-binaries"),
+    videoBitrateKbps: options.project.exportConfig.videoBitrateKbps,
   });
   const bundledServeUrl = await timeAsyncStep("Remotion bundle", () =>
     bundleRemotion({
@@ -1179,6 +1179,7 @@ async function resolveRemotionEncoderOptions(options: {
     targetDir: string;
   }) => Promise<string>;
   targetDir: string;
+  videoBitrateKbps: number;
 }): Promise<
   Partial<Pick<RenderMediaOptions, "binariesDirectory" | "ffmpegOverride">>
 > {
@@ -1193,11 +1194,15 @@ async function resolveRemotionEncoderOptions(options: {
         )({
           targetDir: options.targetDir,
         }),
+        options.videoBitrateKbps,
       );
     }
 
     return {
-      ffmpegOverride: createForceH264EncoderFfmpegOverride(explicitEncoder),
+      ffmpegOverride: createForceH264EncoderFfmpegOverride(
+        explicitEncoder,
+        options.videoBitrateKbps,
+      ),
     };
   }
 
@@ -1217,24 +1222,94 @@ async function resolveRemotionEncoderOptions(options: {
     )({
       targetDir: options.targetDir,
     }),
+    options.videoBitrateKbps,
   );
+}
+
+function buildConstantVideoBitrateArgs(
+  encoder: FinalVideoEncoder,
+  videoBitrateKbps: number,
+): string[] {
+  const bitrate = `${videoBitrateKbps}k`;
+  const bufsize = `${videoBitrateKbps * 2}k`;
+  if (encoder === "libx264") {
+    return [
+      "-b:v",
+      bitrate,
+      "-minrate",
+      bitrate,
+      "-maxrate",
+      bitrate,
+      "-bufsize",
+      bufsize,
+      "-x264-params",
+      "nal-hrd=cbr:force-cfr=1",
+    ];
+  }
+
+  if (encoder !== "h264_nvenc") {
+    return ["-b:v", bitrate];
+  }
+
+  return [
+    "-rc",
+    "cbr",
+    "-b:v",
+    bitrate,
+    "-minrate",
+    bitrate,
+    "-maxrate",
+    bitrate,
+    "-bufsize",
+    bufsize,
+  ];
+}
+
+function removeFfmpegOptionValueArgs(args: string[], flags: string[]): string[] {
+  const nextArgs: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (flags.includes(arg) && index + 1 < args.length) {
+      index += 1;
+      continue;
+    }
+    nextArgs.push(arg);
+  }
+  return nextArgs;
 }
 
 export function forceH264EncoderFfmpegArgs(
   args: string[],
   encoder: FinalVideoEncoder,
+  videoBitrateKbps?: number,
 ): string[] {
   const nextArgs = [...args];
   const videoCodecIndex = nextArgs.lastIndexOf("-c:v");
 
   if (videoCodecIndex >= 0 && videoCodecIndex + 1 < nextArgs.length) {
     nextArgs[videoCodecIndex + 1] = encoder;
-    return nextArgs;
+  } else {
+    const outputIndex = Math.max(nextArgs.length - 1, 0);
+    nextArgs.splice(outputIndex, 0, "-c:v", encoder);
   }
 
-  const outputIndex = Math.max(nextArgs.length - 1, 0);
-  nextArgs.splice(outputIndex, 0, "-c:v", encoder);
-  return nextArgs;
+  if (!videoBitrateKbps) return nextArgs;
+
+  const withoutExistingBitrateOptions = removeFfmpegOptionValueArgs(nextArgs, [
+    "-rc",
+    "-b:v",
+    "-minrate",
+    "-maxrate",
+    "-bufsize",
+    "-x264-params",
+  ]);
+  const outputIndex = Math.max(withoutExistingBitrateOptions.length - 1, 0);
+  withoutExistingBitrateOptions.splice(
+    outputIndex,
+    0,
+    ...buildConstantVideoBitrateArgs(encoder, videoBitrateKbps),
+  );
+  return withoutExistingBitrateOptions;
 }
 
 export function forceNvencFfmpegArgs(args: string[]): string[] {
@@ -1243,8 +1318,10 @@ export function forceNvencFfmpegArgs(args: string[]): string[] {
 
 export function createForceH264EncoderFfmpegOverride(
   encoder: FinalVideoEncoder,
+  videoBitrateKbps?: number,
 ): FfmpegOverrideFn {
-  return ({ args }) => forceH264EncoderFfmpegArgs(args, encoder);
+  return ({ args }) =>
+    forceH264EncoderFfmpegArgs(args, encoder, videoBitrateKbps);
 }
 
 export function createForceNvencFfmpegOverride(): FfmpegOverrideFn {
@@ -1253,10 +1330,14 @@ export function createForceNvencFfmpegOverride(): FfmpegOverrideFn {
 
 function getForcedNvencRemotionOptions(
   binariesDirectory: string,
+  videoBitrateKbps: number,
 ): Pick<RenderMediaOptions, "binariesDirectory" | "ffmpegOverride"> {
   return {
     binariesDirectory,
-    ffmpegOverride: createForceNvencFfmpegOverride(),
+    ffmpegOverride: createForceH264EncoderFfmpegOverride(
+      "h264_nvenc",
+      videoBitrateKbps,
+    ),
   };
 }
 
@@ -1509,8 +1590,10 @@ export function buildFinalFfmpegArgs(options: {
     "1:a:0",
     "-c:v",
     options.videoEncoder,
-    "-b:v",
-    `${options.videoBitrateKbps}k`,
+    ...buildConstantVideoBitrateArgs(
+      options.videoEncoder,
+      options.videoBitrateKbps,
+    ),
   ];
 
   if (options.videoEncoder === "libx264") {

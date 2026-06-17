@@ -12,6 +12,7 @@ import {
   buildVideoChunkConcatArgs,
   buildVideoChunkConcatFallbackArgs,
   cleanupTempDir,
+  createForceH264EncoderFfmpegOverride,
   detectH264HardwareEncoder,
   exportProject,
   getRemotionChunkConcurrency,
@@ -316,6 +317,14 @@ it("builds FFmpeg concat filter fallback args for video chunk stitching", () => 
     "libx264",
     "-b:v",
     "12000k",
+    "-minrate",
+    "12000k",
+    "-maxrate",
+    "12000k",
+    "-bufsize",
+    "24000k",
+    "-x264-params",
+    "nal-hrd=cbr:force-cfr=1",
     "-preset",
     "medium",
     "-pix_fmt",
@@ -1403,9 +1412,66 @@ it("defaults Remotion FFmpeg stitching to NVENC when it is supported", async () 
       type: "stitcher",
       args: ["ffmpeg", "-i", "frames", "-c:v", "libx264", "out.mp4"],
     }),
-  ).toEqual(["ffmpeg", "-i", "frames", "-c:v", "h264_nvenc", "out.mp4"]);
+  ).toEqual([
+    "ffmpeg",
+    "-i",
+    "frames",
+    "-c:v",
+    "h264_nvenc",
+    "-rc",
+    "cbr",
+    "-b:v",
+    "12000k",
+    "-minrate",
+    "12000k",
+    "-maxrate",
+    "12000k",
+    "-bufsize",
+    "24000k",
+    "out.mp4",
+  ]);
   expect(preparedBinariesDirs).toEqual([
     path.join("C:/workspace/.tmp/export-123", "remotion-nvenc-binaries"),
+  ]);
+});
+
+it("forces Remotion NVENC encoding to the selected constant video bitrate", () => {
+  const ffmpegOverride = createForceH264EncoderFfmpegOverride(
+    "h264_nvenc",
+    12000,
+  );
+
+  expect(
+    ffmpegOverride({
+      type: "stitcher",
+      args: [
+        "ffmpeg",
+        "-i",
+        "frames",
+        "-c:v",
+        "libx264",
+        "-b:v",
+        "2000k",
+        "out.mp4",
+      ],
+    }),
+  ).toEqual([
+    "ffmpeg",
+    "-i",
+    "frames",
+    "-c:v",
+    "h264_nvenc",
+    "-rc",
+    "cbr",
+    "-b:v",
+    "12000k",
+    "-minrate",
+    "12000k",
+    "-maxrate",
+    "12000k",
+    "-bufsize",
+    "24000k",
+    "out.mp4",
   ]);
 });
 
@@ -1523,7 +1589,24 @@ it("uses an environment-specified Remotion encoder instead of default NVENC", as
       type: "stitcher",
       args: ["ffmpeg", "-i", "frames", "-c:v", "h264_nvenc", "out.mp4"],
     }),
-  ).toEqual(["ffmpeg", "-i", "frames", "-c:v", "libx264", "out.mp4"]);
+  ).toEqual([
+    "ffmpeg",
+    "-i",
+    "frames",
+    "-c:v",
+    "libx264",
+    "-b:v",
+    "12000k",
+    "-minrate",
+    "12000k",
+    "-maxrate",
+    "12000k",
+    "-bufsize",
+    "24000k",
+    "-x264-params",
+    "nal-hrd=cbr:force-cfr=1",
+    "out.mp4",
+  ]);
   expect(probedHardware).toBe(false);
   expect(preparedBinaries).toBe(false);
 });
@@ -2119,8 +2202,16 @@ it("builds final FFmpeg args for GPU-accelerated H.264 export", () => {
     "1:a:0",
     "-c:v",
     "h264_nvenc",
+    "-rc",
+    "cbr",
     "-b:v",
     "8000k",
+    "-minrate",
+    "8000k",
+    "-maxrate",
+    "8000k",
+    "-bufsize",
+    "16000k",
     "-pix_fmt",
     "yuv420p",
     "-c:a",
@@ -2181,6 +2272,14 @@ it("builds final FFmpeg args for CPU fallback H.264 export", () => {
     "libx264",
     "-b:v",
     "8000k",
+    "-minrate",
+    "8000k",
+    "-maxrate",
+    "8000k",
+    "-bufsize",
+    "16000k",
+    "-x264-params",
+    "nal-hrd=cbr:force-cfr=1",
     "-preset",
     "medium",
     "-pix_fmt",
