@@ -200,6 +200,19 @@ it("preserves dense spectrum frames so exported visuals match preview behavior",
   expect(prepared.tracks[0].spectrumFrames?.at(-1)?.[0]).toBeGreaterThan(0.95);
 });
 
+it("strips preview audio URLs from Remotion export props so muted video renders do not download track audio", () => {
+  const project = createTestProject();
+  project.tracks[0] = {
+    ...project.tracks[0],
+    audioPreviewUrl:
+      "http://127.0.0.1:4317/api/v1/projects/current/media/track-1/audio?v=track.mp3",
+  };
+
+  const prepared = prepareProjectForRemotionRender(project);
+
+  expect(prepared.tracks[0]).not.toHaveProperty("audioPreviewUrl");
+});
+
 it("builds inclusive Remotion frame chunks that cover every frame exactly once", () => {
   expect(buildRemotionFrameChunks(1, 30)).toEqual([[0, 0]]);
   expect(buildRemotionFrameChunks(30, 30)).toEqual([[0, 29]]);

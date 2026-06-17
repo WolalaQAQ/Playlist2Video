@@ -1083,7 +1083,9 @@ export async function renderProjectVideoOnly(
 export function prepareProjectForRemotionRender(project: Project): Project {
   return {
     ...project,
-    tracks: project.tracks.map((track) => ({ ...track })),
+    tracks: project.tracks.map(
+      ({ audioPreviewUrl: _audioPreviewUrl, ...track }) => ({ ...track }),
+    ),
   };
 }
 
