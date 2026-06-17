@@ -597,6 +597,130 @@ it("renders segmented Remotion chunks in parallel with lower per-chunk concurren
   }
 });
 
+it("starts the next Remotion chunk as soon as a worker slot frees up", async () => {
+  const workspaceDir = await fs.mkdtemp(
+    path.join(process.cwd(), ".tmp-segment-queue-test-"),
+  );
+  const tempDir = path.join(workspaceDir, ".tmp", "export-123");
+  const videoOnlyPath = path.join(tempDir, "video.mp4");
+  const project = createTestProject();
+  const events: string[] = [];
+  let activeRenders = 0;
+  let maxActiveRenders = 0;
+
+  try {
+    await fs.mkdir(tempDir, { recursive: true });
+    await renderProjectVideoOnly({
+      project,
+      workspaceDir,
+      tempDir,
+      videoOnlyPath,
+      remotionChunkSizeFrames: 30,
+      remotionChunkParallelism: 2,
+      remotionChunkConcurrency: 1,
+      bundleRemotion: async (options) => String(options.outDir),
+      startBundleServer: async () => ({
+        serveUrl: "http://127.0.0.1:36500/",
+        close: async () => undefined,
+      }),
+      selectCompositionFn: async () => createTestComposition(project, 120),
+      renderMediaFn: async (options) => {
+        const frameRange = options.frameRange as [number, number];
+        const chunkIndex = frameRange[0] / 30;
+        events.push(`start-${chunkIndex}`);
+        activeRenders += 1;
+        maxActiveRenders = Math.max(maxActiveRenders, activeRenders);
+        await new Promise((resolve) =>
+          setTimeout(resolve, chunkIndex === 0 ? 50 : 1),
+        );
+        activeRenders -= 1;
+        events.push(`end-${chunkIndex}`);
+        await fs.mkdir(path.dirname(String(options.outputLocation)), {
+          recursive: true,
+        });
+        await fs.writeFile(String(options.outputLocation), "chunk");
+        return { buffer: null, slowestFrames: [], contentType: "video/mp4" };
+      },
+      runFfmpeg: async () => {
+        await fs.writeFile(videoOnlyPath, "stitched");
+      },
+    });
+
+    expect(maxActiveRenders).toBe(2);
+    expect(events.indexOf("start-2")).toBeGreaterThan(-1);
+    expect(events.indexOf("start-2")).toBeLessThan(events.indexOf("end-0"));
+  } finally {
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+  }
+});
+
+it("shares one restarted Remotion render context across queued workers", async () => {
+  const workspaceDir = await fs.mkdtemp(
+    path.join(process.cwd(), ".tmp-segment-context-test-"),
+  );
+  const tempDir = path.join(workspaceDir, ".tmp", "export-123");
+  const videoOnlyPath = path.join(tempDir, "video.mp4");
+  const project = createTestProject();
+  const startedServeUrls: string[] = [];
+  let failingChunkAttempts = 0;
+
+  try {
+    await fs.mkdir(tempDir, { recursive: true });
+    await renderProjectVideoOnly({
+      project,
+      workspaceDir,
+      tempDir,
+      videoOnlyPath,
+      remotionChunkSizeFrames: 30,
+      remotionChunkParallelism: 2,
+      remotionChunkConcurrency: 1,
+      bundleRemotion: async (options) => String(options.outDir),
+      startBundleServer: async () => {
+        const serveUrl = `http://127.0.0.1:${36500 + startedServeUrls.length}/`;
+        startedServeUrls.push(serveUrl);
+        return {
+          serveUrl,
+          close: async () => undefined,
+        };
+      },
+      selectCompositionFn: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return createTestComposition(project, 150);
+      },
+      renderMediaFn: async (options) => {
+        const frameRange = options.frameRange as [number, number];
+        const chunkIndex = frameRange[0] / 30;
+        if (chunkIndex === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+        }
+        if (chunkIndex === 1) {
+          failingChunkAttempts += 1;
+          if (failingChunkAttempts === 1) {
+            throw new Error(
+              `Visited "${options.serveUrl}index.html" but got no response.`,
+            );
+          }
+        }
+        await fs.mkdir(path.dirname(String(options.outputLocation)), {
+          recursive: true,
+        });
+        await fs.writeFile(String(options.outputLocation), "chunk");
+        return { buffer: null, slowestFrames: [], contentType: "video/mp4" };
+      },
+      runFfmpeg: async () => {
+        await fs.writeFile(videoOnlyPath, "stitched");
+      },
+    });
+
+    expect(startedServeUrls).toEqual([
+      "http://127.0.0.1:36500/",
+      "http://127.0.0.1:36501/",
+    ]);
+  } finally {
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+  }
+});
+
 it("retries only a failed Remotion chunk without re-rendering completed chunks", async () => {
   const workspaceDir = await fs.mkdtemp(
     path.join(process.cwd(), ".tmp-segment-retry-test-"),
