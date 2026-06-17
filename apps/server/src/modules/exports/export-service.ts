@@ -829,6 +829,10 @@ export async function renderProjectVideoOnly(
   let currentServer: PreparedRemotionBundleServer | null = null;
   let currentComposition: Awaited<ReturnType<typeof selectComposition>> | null =
     null;
+  let pendingRenderContext: Promise<{
+    server: PreparedRemotionBundleServer;
+    composition: Awaited<ReturnType<typeof selectComposition>>;
+  }> | null = null;
 
   const closeCurrentServer = async () => {
     if (!currentServer) return;
@@ -885,23 +889,31 @@ export async function renderProjectVideoOnly(
     if (currentServer && currentComposition) {
       return { server: currentServer, composition: currentComposition };
     }
+    if (pendingRenderContext) return pendingRenderContext;
 
-    for (let attempt = 0; attempt < remotionRenderMaxAttempts; attempt++) {
+    pendingRenderContext = (async () => {
       try {
-        return await startServerAndSelectComposition();
-      } catch (error) {
-        const shouldRetry =
-          attempt < remotionRenderMaxAttempts - 1 &&
-          isRetriableRemotionBrowserError(error);
-        if (!shouldRetry) throw error;
-        await waitForRemotionCleanup();
-        console.info(
-          `[Remotion] Recovered transient browser navigation issue; retrying render (${attempt + 2}/${remotionRenderMaxAttempts}).`,
-        );
-      }
-    }
+        for (let attempt = 0; attempt < remotionRenderMaxAttempts; attempt++) {
+          try {
+            return await startServerAndSelectComposition();
+          } catch (error) {
+            const shouldRetry =
+              attempt < remotionRenderMaxAttempts - 1 &&
+              isRetriableRemotionBrowserError(error);
+            if (!shouldRetry) throw error;
+            await waitForRemotionCleanup();
+            console.info(
+              `[Remotion] Recovered transient browser navigation issue; retrying render (${attempt + 2}/${remotionRenderMaxAttempts}).`,
+            );
+          }
+        }
 
-    throw new Error("Unable to select Remotion composition.");
+        throw new Error("Unable to select Remotion composition.");
+      } finally {
+        pendingRenderContext = null;
+      }
+    })();
+    return pendingRenderContext;
   };
 
   try {
@@ -1015,51 +1027,96 @@ export async function renderProjectVideoOnly(
 
     const chunkAttempts = chunks.map(() => 0);
     let pendingChunkIndices = chunks.map((_, chunkIndex) => chunkIndex);
+    type ChunkRenderResult = { chunkIndex: number; error: unknown | null };
+    type ActiveChunkRender = {
+      chunkIndex: number;
+      promise: Promise<ChunkRenderResult>;
+    };
 
-    while (pendingChunkIndices.length > 0) {
-      const { composition: activeComposition, server: activeServer } =
-        await ensureRenderContext();
-      const batch = pendingChunkIndices.slice(0, chunkParallelism);
-      pendingChunkIndices = pendingChunkIndices.slice(chunkParallelism);
+    const renderChunkResult = async (
+      chunkIndex: number,
+    ): Promise<ChunkRenderResult> => {
+      try {
+        const { composition: activeComposition, server: activeServer } =
+          await ensureRenderContext();
+        await renderChunkAttempt(chunkIndex, activeComposition, activeServer);
+        return { chunkIndex, error: null };
+      } catch (error) {
+        return { chunkIndex, error };
+      }
+    };
 
-      const batchResults = await Promise.all(
-        batch.map(async (chunkIndex) => {
-          try {
-            await renderChunkAttempt(
-              chunkIndex,
-              activeComposition,
-              activeServer,
-            );
-            return { chunkIndex, error: null };
-          } catch (error) {
-            return { chunkIndex, error };
-          }
-        }),
-      );
+    const activeChunkRenders: ActiveChunkRender[] = [];
+    const retryChunkIndices: number[] = [];
+    let fatalChunkError: unknown | null = null;
+    let restartBeforeDispatchingMoreChunks = false;
 
-      const retryChunkIndices: number[] = [];
-      for (const result of batchResults) {
-        if (!result.error) continue;
+    const launchNextChunk = () => {
+      const chunkIndex = pendingChunkIndices.shift();
+      if (chunkIndex === undefined) return;
+      activeChunkRenders.push({
+        chunkIndex,
+        promise: renderChunkResult(chunkIndex),
+      });
+    };
 
-        const attempt = chunkAttempts[result.chunkIndex];
-        const shouldRetry =
-          attempt < remotionRenderMaxAttempts - 1 &&
-          isRetriableRemotionBrowserError(result.error);
-        if (!shouldRetry) throw result.error;
-
-        chunkAttempts[result.chunkIndex] = attempt + 1;
-        retryChunkIndices.push(result.chunkIndex);
-        console.info(
-          shouldRenderInChunks
-            ? `[Remotion] Recovered transient browser navigation issue; retrying chunk ${result.chunkIndex + 1}/${chunks.length} (${attempt + 2}/${remotionRenderMaxAttempts}).`
-            : `[Remotion] Recovered transient browser navigation issue; retrying render (${attempt + 2}/${remotionRenderMaxAttempts}).`,
-        );
+    while (pendingChunkIndices.length > 0 || activeChunkRenders.length > 0) {
+      while (
+        !fatalChunkError &&
+        !restartBeforeDispatchingMoreChunks &&
+        pendingChunkIndices.length > 0 &&
+        activeChunkRenders.length < chunkParallelism
+      ) {
+        launchNextChunk();
       }
 
-      if (retryChunkIndices.length > 0) {
+      if (activeChunkRenders.length > 0) {
+        const completed = await Promise.race(
+          activeChunkRenders.map(async (activeRender) => ({
+            activeRender,
+            result: await activeRender.promise,
+          })),
+        );
+        activeChunkRenders.splice(
+          activeChunkRenders.indexOf(completed.activeRender),
+          1,
+        );
+
+        if (completed.result.error && !fatalChunkError) {
+          const attempt = chunkAttempts[completed.result.chunkIndex];
+          const shouldRetry =
+            attempt < remotionRenderMaxAttempts - 1 &&
+            isRetriableRemotionBrowserError(completed.result.error);
+
+          if (shouldRetry) {
+            chunkAttempts[completed.result.chunkIndex] = attempt + 1;
+            retryChunkIndices.push(completed.result.chunkIndex);
+            restartBeforeDispatchingMoreChunks = true;
+            console.info(
+              shouldRenderInChunks
+                ? `[Remotion] Recovered transient browser navigation issue; retrying chunk ${completed.result.chunkIndex + 1}/${chunks.length} (${attempt + 2}/${remotionRenderMaxAttempts}).`
+                : `[Remotion] Recovered transient browser navigation issue; retrying render (${attempt + 2}/${remotionRenderMaxAttempts}).`,
+            );
+          } else {
+            fatalChunkError = completed.result.error;
+            pendingChunkIndices = [];
+          }
+        }
+      }
+
+      if (fatalChunkError && activeChunkRenders.length === 0) {
+        throw fatalChunkError;
+      }
+
+      if (
+        restartBeforeDispatchingMoreChunks &&
+        activeChunkRenders.length === 0
+      ) {
         await waitForRemotionCleanup();
         await closeCurrentServer();
         pendingChunkIndices = [...retryChunkIndices, ...pendingChunkIndices];
+        retryChunkIndices.length = 0;
+        restartBeforeDispatchingMoreChunks = false;
       }
     }
 
