@@ -1,3 +1,47 @@
+## [0.1.16] - 2026-06-17
+
+### Features
+
+- Added segmented Remotion video-only rendering for longer exports, rendering inclusive frame-range chunks to disk before stitching them into the intermediate MP4.
+- Added bounded chunk-level parallel rendering for segmented Remotion exports, defaulting to 8 chunks in parallel with per-chunk Remotion concurrency 2.
+- Added `PLAYLIST2VIDEO_REMOTION_CHUNK_PARALLELISM` and `PLAYLIST2VIDEO_REMOTION_CHUNK_CONCURRENCY` overrides for tuning the chunk-level and per-chunk render budgets.
+- Retried only the failed Remotion chunk after transient localhost/Chromium bundle-load failures, preserving completed chunk progress within the same export attempt.
+- Added FFmpeg chunk stitching with stream-copy concat as the fast path and concat-filter re-encode fallback if copy concat fails.
+
+### Design Rationale
+
+- Remotion `frameRange` renders absolute composition frames and uses inclusive end-frame semantics, so chunked rendering can preserve timeline-driven visuals while avoiding full video-stage restarts after a transient browser failure.
+- Short Hyperflip#1 video-only benchmarks showed single `renderMedia` chunk-internal concurrency 16 left the GPU underfed; distributing the same total worker budget across more chunks improved throughput substantially (`1x16` about 21.4 fps, `4x4` about 58.4 fps, `8x2` about 74.9 fps over the 1200-frame benchmark).
+- The Remotion pass remains video-only (`muted: true`), keeping all audio handling in the existing FFmpeg playlist-audio concat and final mux stages where export volume is already applied.
+- The implementation preserves ANGLE GL, render concurrency, and parallel encoding defaults while restarting the prepared Remotion server only when a transient chunk failure makes that necessary.
+
+### Notes & Caveats
+
+- Segment progress preservation is same-process only; interrupted exports do not yet resume from a persisted manifest across app restarts.
+- Stream-copy chunk stitching assumes identical Remotion render settings. If FFmpeg rejects that path, Playlist2Video falls back to re-encoding the stitched video with `libx264` before the existing final audio mux stage.
+- Very short exports with fewer than 8 chunks naturally cap chunk parallelism to the chunk count.
+
+## [0.1.15] - 2026-06-17
+
+### Fixes
+
+- Expanded Remotion export retry handling for transient localhost bundle-load failures such as `ERR_CONNECTION_RESET`, `ERR_CONTENT_LENGTH_MISMATCH`, `ERR_EMPTY_RESPONSE`, and `ERR_SOCKET`.
+- Increased the Remotion video render retry budget from one retry to up to three attempts while retaining cleanup settle waits between attempts.
+- Restored the explicit stable Remotion bundle server lifecycle while keeping render concurrency and parallel encoding enabled.
+- Kept Chromium ANGLE GL rendering enabled by default and stabilized long real-playlist exports without disabling render concurrency.
+
+### Design Rationale
+
+- Real export logs showed Remotion can report bundle server races as browser resource-load failures instead of only `Visited ... but got no response`, so retry classification now covers the observed localhost failure family without retrying unrelated render errors.
+- A small bounded retry budget handles sequential select/render server lifecycle races while still failing quickly on persistent or non-transient problems.
+- Hyperflip#1 two-minute export windows showed localhost bundle serving races and transient Chromium load failures. The fix targets Remotion server lifecycle, deterministic high ports, prepared-server reuse, and bounded retries while preserving the faster ANGLE GL path.
+
+### Notes & Caveats
+
+- Retry matching is limited to browser load/resource errors on loopback Remotion URLs and known transient network fragments, avoiding broad retries of composition or template bugs.
+- This builds on the mixed-audio concat and Windows temp cleanup hardening already in the current export fix branch.
+- Chromium ANGLE GL remains the default export path for performance. Users can explicitly disable it with `PLAYLIST2VIDEO_REMOTION_GPU=0` or select another backend with `PLAYLIST2VIDEO_REMOTION_GL` if a machine-specific driver issue requires it.
+
 ## [0.1.14] - 2026-06-17
 
 ### Features

@@ -9,6 +9,7 @@ import {
   renderMedia,
   selectComposition,
 } from "@remotion/renderer";
+import { NoReactInternals } from "remotion/no-react";
 import type {
   FfmpegOverrideFn,
   LogLevel,
@@ -56,12 +57,22 @@ type FinalFfmpegExportForExport = (
 type PrepareRemotionServerOptions = Parameters<
   typeof RenderInternals.prepareServer
 >[0];
+type PreparedRemotionBundleServer = {
+  serveUrl: string;
+  close: (force: boolean) => Promise<void>;
+  remotionServer?: RemotionServer;
+};
+
+function noopOnBrowserDownload() {
+  return { version: null, onProgress: () => undefined };
+}
 
 export interface StartRemotionBundleServerOptions {
   bundleDir: string;
   remotionRoot?: string;
   sampleRate?: number;
   port?: number | null;
+  portRetries?: number;
   logLevel?: LogLevel;
   prepareServer?: (
     options: PrepareRemotionServerOptions,
@@ -74,16 +85,28 @@ export interface RenderProjectVideoOnlyOptions {
   tempDir: string;
   videoOnlyPath: string;
   onProgress?: (progress: number) => void;
+  remotionChunkSizeFrames?: number;
+  remotionChunkParallelism?: number;
+  remotionChunkConcurrency?: number;
+  runFfmpeg?: (args: string[]) => Promise<void>;
   bundleRemotion?: (options: BundleOptions) => Promise<string>;
   startBundleServer?: (
     options: StartRemotionBundleServerOptions,
-  ) => Promise<{ serveUrl: string; close: (force: boolean) => Promise<void> }>;
+  ) => Promise<PreparedRemotionBundleServer>;
+  remotionRenderMaxAttempts?: number;
+  remotionCleanupSettleMs?: number;
+  wait?: (milliseconds: number) => Promise<void>;
   selectCompositionFn?: (
     options: SelectCompositionOptions,
   ) => ReturnType<typeof selectComposition>;
   renderMediaFn?: (
     options: RenderMediaOptions,
   ) => ReturnType<typeof renderMedia>;
+  renderWithPreparedServer?: (options: {
+    server: RemotionServer | undefined;
+    renderOptions: RenderMediaOptions;
+    inputProps: { project: Project };
+  }) => ReturnType<typeof renderMedia>;
   detectHardwareEncoder?: () => Promise<H264HardwareEncoder | null>;
   prepareForcedNvencBinariesDirectory?: (options: {
     targetDir: string;
@@ -148,6 +171,98 @@ export async function timeAsyncStep<T>(
   }
 }
 
+function sleep(milliseconds: number): Promise<void> {
+  if (milliseconds <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+const defaultRemotionChunkDurationSeconds = 60;
+const defaultRemotionRenderConcurrency = 16;
+const defaultRemotionChunkParallelism = 8;
+const defaultRemotionChunkConcurrency = 2;
+
+function isRetriableCleanupError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "EBUSY" || code === "ENOTEMPTY" || code === "EPERM";
+}
+
+function formatUnknownError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+export async function removePathWithRetries(
+  targetPath: string,
+  options: {
+    maxAttempts?: number;
+    initialDelayMs?: number;
+    remove?: (targetPath: string) => Promise<void>;
+    wait?: (milliseconds: number) => Promise<void>;
+  } = {},
+): Promise<void> {
+  const maxAttempts = Math.max(1, options.maxAttempts ?? 8);
+  const initialDelayMs = options.initialDelayMs ?? 250;
+  const remove =
+    options.remove ??
+    ((pathToRemove: string) =>
+      fs.rm(pathToRemove, { recursive: true, force: true }));
+  const wait = options.wait ?? sleep;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await remove(targetPath);
+      return;
+    } catch (error) {
+      const shouldRetry =
+        attempt < maxAttempts && isRetriableCleanupError(error);
+      if (!shouldRetry) throw error;
+      await wait(initialDelayMs * 2 ** (attempt - 1));
+    }
+  }
+}
+
+export async function cleanupTempDir(
+  tempDir: string,
+  options: {
+    removeTempDir?: (tempDir: string) => Promise<void>;
+    logWarn?: (message: string) => void;
+    exportError?: unknown;
+    exportCompleted?: boolean;
+  } = {},
+): Promise<void> {
+  const removeTempDir =
+    options.removeTempDir ??
+    ((pathToRemove: string) => removePathWithRetries(pathToRemove));
+  const logWarn = options.logWarn ?? console.warn;
+
+  try {
+    await removeTempDir(tempDir);
+  } catch (cleanupError) {
+    const message =
+      `Could not clean temporary export directory "${tempDir}": ` +
+      formatUnknownError(cleanupError);
+
+    if (options.exportError) {
+      logWarn(
+        `${message}. Original export error: ${formatUnknownError(
+          options.exportError,
+        )}`,
+      );
+      return;
+    }
+
+    if (options.exportCompleted) {
+      logWarn(
+        `${message}. Export output was already completed; leaving temp files for manual cleanup.`,
+      );
+      return;
+    }
+
+    throw cleanupError;
+  }
+}
+
 export function escapeFfmpegConcatPath(filePath: string): string {
   return filePath.replaceAll("'", "'\\''");
 }
@@ -157,6 +272,205 @@ export function buildFfmpegConcatList(filePaths: string[]): string {
     filePaths
       .map((filePath) => `file '${escapeFfmpegConcatPath(filePath)}'`)
       .join("\n") + "\n"
+  );
+}
+
+export type RemotionFrameChunk = [start: number, end: number];
+
+export function buildRemotionFrameChunks(
+  totalFrames: number,
+  chunkSizeFrames: number,
+): RemotionFrameChunk[] {
+  if (!Number.isInteger(totalFrames) || totalFrames <= 0) {
+    throw new Error(
+      `totalFrames must be a positive integer, got ${totalFrames}.`,
+    );
+  }
+  if (!Number.isInteger(chunkSizeFrames) || chunkSizeFrames <= 0) {
+    throw new Error(
+      `chunkSizeFrames must be a positive integer, got ${chunkSizeFrames}.`,
+    );
+  }
+
+  const chunks: RemotionFrameChunk[] = [];
+  for (let start = 0; start < totalFrames; start += chunkSizeFrames) {
+    chunks.push([
+      start,
+      Math.min(totalFrames - 1, start + chunkSizeFrames - 1),
+    ]);
+  }
+  return chunks;
+}
+
+export function getRemotionChunkParallelism(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  return parsePositiveIntegerEnv(
+    env.PLAYLIST2VIDEO_REMOTION_CHUNK_PARALLELISM,
+    "PLAYLIST2VIDEO_REMOTION_CHUNK_PARALLELISM",
+    defaultRemotionChunkParallelism,
+  );
+}
+
+export function getRemotionChunkConcurrency(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  return parsePositiveIntegerEnv(
+    env.PLAYLIST2VIDEO_REMOTION_CHUNK_CONCURRENCY,
+    "PLAYLIST2VIDEO_REMOTION_CHUNK_CONCURRENCY",
+    defaultRemotionChunkConcurrency,
+  );
+}
+
+function parsePositiveIntegerEnv(
+  value: string | undefined,
+  name: string,
+  fallback: number,
+): number {
+  if (value === undefined || value.trim() === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer, got "${value}".`);
+  }
+  return parsed;
+}
+
+export function getRemotionChunkPath(
+  tempDir: string,
+  chunkIndex: number,
+): string {
+  if (!Number.isInteger(chunkIndex) || chunkIndex < 0) {
+    throw new Error(
+      `chunkIndex must be a non-negative integer, got ${chunkIndex}.`,
+    );
+  }
+
+  return path.join(
+    tempDir,
+    "remotion-video-chunks",
+    `chunk-${String(chunkIndex + 1).padStart(4, "0")}.mp4`,
+  );
+}
+
+export function buildVideoChunkConcatArgs(options: {
+  concatListPath: string;
+  outputPath: string;
+  fps: number;
+}): string[] {
+  return [
+    "-y",
+    "-stats",
+    "-f",
+    "concat",
+    "-safe",
+    "0",
+    "-i",
+    options.concatListPath,
+    "-an",
+    "-c:v",
+    "copy",
+    "-r",
+    String(options.fps),
+    "-movflags",
+    "faststart",
+    options.outputPath,
+  ];
+}
+
+export function buildVideoChunkConcatFallbackArgs(options: {
+  chunkPaths: string[];
+  outputPath: string;
+  fps: number;
+  videoBitrateKbps: number;
+}): string[] {
+  if (options.chunkPaths.length === 0) {
+    throw new Error("Cannot stitch an empty list of video chunks.");
+  }
+
+  const inputArgs = options.chunkPaths.flatMap((chunkPath) => [
+    "-i",
+    chunkPath,
+  ]);
+  const videoInputs = options.chunkPaths
+    .map((_, index) => `[${index}:v:0]`)
+    .join("");
+
+  return [
+    "-y",
+    "-stats",
+    ...inputArgs,
+    "-filter_complex",
+    `${videoInputs}concat=n=${options.chunkPaths.length}:v=1:a=0[vout]`,
+    "-map",
+    "[vout]",
+    "-an",
+    "-c:v",
+    "libx264",
+    "-b:v",
+    `${options.videoBitrateKbps}k`,
+    "-preset",
+    "medium",
+    "-pix_fmt",
+    "yuv420p",
+    "-r",
+    String(options.fps),
+    "-movflags",
+    "faststart",
+    options.outputPath,
+  ];
+}
+
+async function stitchVideoChunks(options: {
+  tempDir: string;
+  chunkPaths: string[];
+  outputPath: string;
+  fps: number;
+  videoBitrateKbps: number;
+  runFfmpeg?: (args: string[]) => Promise<void>;
+  logInfo?: (message: string) => void;
+  logWarn?: (message: string) => void;
+}): Promise<void> {
+  if (options.chunkPaths.length === 0) {
+    throw new Error("Cannot stitch an empty list of Remotion video chunks.");
+  }
+
+  if (options.chunkPaths.length === 1) {
+    await fs.copyFile(options.chunkPaths[0], options.outputPath);
+    return;
+  }
+
+  const runFfmpeg =
+    options.runFfmpeg ??
+    ((args: string[]) =>
+      execa("ffmpeg", args, getVisibleFfmpegOptions()).then(() => undefined));
+  const concatListPath = path.join(options.tempDir, "video-chunks.txt");
+  await fs.writeFile(concatListPath, buildFfmpegConcatList(options.chunkPaths));
+
+  options.logInfo?.(
+    "[FFmpeg] Stitching segmented Remotion video chunks with stream copy.",
+  );
+  try {
+    await runFfmpeg(
+      buildVideoChunkConcatArgs({
+        concatListPath,
+        outputPath: options.outputPath,
+        fps: options.fps,
+      }),
+    );
+    return;
+  } catch {
+    options.logWarn?.(
+      "[FFmpeg] Stream-copy chunk stitching failed. Falling back to concat filter re-encode.",
+    );
+  }
+
+  await runFfmpeg(
+    buildVideoChunkConcatFallbackArgs({
+      chunkPaths: options.chunkPaths,
+      outputPath: options.outputPath,
+      fps: options.fps,
+      videoBitrateKbps: options.videoBitrateKbps,
+    }),
   );
 }
 
@@ -183,39 +497,302 @@ export function normalizeRemotionServeUrl(serveUrl: string): string {
   return url.toString();
 }
 
-export async function startRemotionBundleServer(
-  options: StartRemotionBundleServerOptions,
-): Promise<{ serveUrl: string; close: (force: boolean) => Promise<void> }> {
-  const prepareServer = options.prepareServer ?? RenderInternals.prepareServer;
-  const server = await prepareServer({
-    webpackConfigOrServeUrl: options.bundleDir,
-    port: options.port ?? null,
-    remotionRoot: options.remotionRoot ?? path.dirname(getRemotionEntryPoint()),
-    offthreadVideoThreads: 0,
-    logLevel: options.logLevel ?? "info",
+const remotionBundleServerPortStart = 36000;
+const remotionBundleServerPortRange = 2000;
+
+export function getRemotionBundleServerPort(seed: string): number {
+  let hash = 0;
+  for (const char of seed) {
+    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  }
+
+  return remotionBundleServerPortStart + (hash % remotionBundleServerPortRange);
+}
+
+function nextRemotionBundleServerPort(port: number): number {
+  const offset =
+    (port - remotionBundleServerPortStart + 1) % remotionBundleServerPortRange;
+  return remotionBundleServerPortStart + offset;
+}
+
+function isRemotionPortUnavailableError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as NodeJS.ErrnoException).code;
+  return (
+    code === "EADDRINUSE" ||
+    error.message.includes("is not available") ||
+    error.message.includes("EADDRINUSE")
+  );
+}
+
+function isCompleteRemotionServer(
+  server: Pick<RemotionServer, "serveUrl" | "closeServer">,
+): server is RemotionServer {
+  return (
+    "offthreadPort" in server &&
+    "compositor" in server &&
+    "sourceMap" in server &&
+    "downloadMap" in server
+  );
+}
+
+function serializeRemotionInputProps(data: Record<string, unknown>): string {
+  return NoReactInternals.serializeJSONWithSpecialTypes({
+    indent: undefined,
+    staticBase: null,
+    data,
+  }).serializedString;
+}
+
+async function selectCompositionWithPreparedServer(options: {
+  server: RemotionServer | undefined;
+  serveUrl: string;
+  id: string;
+  inputProps: Record<string, unknown>;
+  chromiumOptions: RemotionChromiumOptions | undefined;
+}): ReturnType<typeof selectComposition> {
+  if (!options.server) {
+    return selectComposition({
+      serveUrl: options.serveUrl,
+      id: options.id,
+      inputProps: options.inputProps,
+      ...(options.chromiumOptions
+        ? { chromiumOptions: options.chromiumOptions }
+        : {}),
+    });
+  }
+
+  const { metadata } = await RenderInternals.internalSelectComposition({
+    id: options.id,
+    serveUrl: options.serveUrl,
+    server: options.server,
+    serializedInputPropsWithCustomSchema: serializeRemotionInputProps(
+      options.inputProps,
+    ),
+    browserExecutable: null,
+    chromiumOptions: options.chromiumOptions ?? {},
+    envVariables: {},
     indent: false,
+    logLevel: "info",
+    onBrowserLog: null,
+    onBrowserDownload: noopOnBrowserDownload,
+    onServeUrlVisited: () => undefined,
+    port: null,
+    puppeteerInstance: undefined,
+    timeoutInMilliseconds: 30000,
     offthreadVideoCacheSizeInBytes: null,
     binariesDirectory: null,
-    forceIPv4: true,
-    sampleRate: options.sampleRate ?? 48000,
+    chromeMode: "headless-shell",
+    offthreadVideoThreads: null,
+    mediaCacheSizeInBytes: null,
   });
 
-  return {
-    serveUrl: normalizeRemotionServeUrl(server.serveUrl),
-    close: async (force: boolean) => {
-      await server.closeServer(force);
-    },
-  };
+  return metadata;
+}
+
+async function renderMediaWithPreparedServer(options: {
+  server: RemotionServer | undefined;
+  renderOptions: RenderMediaOptions;
+  inputProps: { project: Project };
+}): ReturnType<typeof renderMedia> {
+  const { server, renderOptions } = options;
+  if (!server) return renderMedia(renderOptions);
+
+  const composition = renderOptions.composition;
+  const logLevel: LogLevel =
+    renderOptions.verbose || renderOptions.dumpBrowserLogs
+      ? "verbose"
+      : (renderOptions.logLevel ?? "info");
+  const licenseKey =
+    "licenseKey" in renderOptions
+      ? (renderOptions.licenseKey ?? null)
+      : "apiKey" in renderOptions
+        ? (renderOptions.apiKey ?? null)
+        : null;
+
+  return RenderInternals.internalRenderMedia({
+    proResProfile: renderOptions.proResProfile ?? undefined,
+    x264Preset: renderOptions.x264Preset ?? null,
+    gopSize: renderOptions.gopSize ?? null,
+    crf: renderOptions.crf ?? null,
+    composition,
+    serializedInputPropsWithCustomSchema: serializeRemotionInputProps(
+      options.inputProps,
+    ),
+    pixelFormat: renderOptions.pixelFormat ?? null,
+    codec: renderOptions.codec,
+    envVariables: renderOptions.envVariables ?? {},
+    frameRange: renderOptions.frameRange ?? null,
+    puppeteerInstance: renderOptions.puppeteerInstance,
+    outputLocation: renderOptions.outputLocation ?? null,
+    onProgress: renderOptions.onProgress ?? (() => undefined),
+    overwrite: renderOptions.overwrite ?? true,
+    onDownload: renderOptions.onDownload ?? (() => undefined),
+    onBrowserLog: renderOptions.onBrowserLog ?? null,
+    onStart: renderOptions.onStart ?? (() => undefined),
+    timeoutInMilliseconds: renderOptions.timeoutInMilliseconds ?? 30000,
+    chromiumOptions: renderOptions.chromiumOptions ?? {},
+    scale: renderOptions.scale ?? 1,
+    browserExecutable: renderOptions.browserExecutable ?? null,
+    port: null,
+    cancelSignal: renderOptions.cancelSignal,
+    muted: renderOptions.muted ?? false,
+    enforceAudioTrack: renderOptions.enforceAudioTrack ?? false,
+    ffmpegOverride: renderOptions.ffmpegOverride,
+    audioBitrate: renderOptions.audioBitrate ?? null,
+    videoBitrate: renderOptions.videoBitrate ?? null,
+    encodingMaxRate: renderOptions.encodingMaxRate ?? null,
+    encodingBufferSize: renderOptions.encodingBufferSize ?? null,
+    audioCodec: renderOptions.audioCodec ?? null,
+    concurrency: renderOptions.concurrency ?? null,
+    disallowParallelEncoding: renderOptions.disallowParallelEncoding ?? false,
+    everyNthFrame: renderOptions.everyNthFrame ?? 1,
+    imageFormat: renderOptions.imageFormat ?? null,
+    jpegQuality: renderOptions.jpegQuality ?? 80,
+    numberOfGifLoops: renderOptions.numberOfGifLoops ?? null,
+    onCtrlCExit: () => undefined,
+    preferLossless: renderOptions.preferLossless ?? false,
+    serveUrl: renderOptions.serveUrl,
+    server,
+    logLevel,
+    indent: false,
+    serializedResolvedPropsWithCustomSchema: serializeRemotionInputProps(
+      (composition.props ?? {}) as Record<string, unknown>,
+    ),
+    offthreadVideoCacheSizeInBytes:
+      renderOptions.offthreadVideoCacheSizeInBytes ?? null,
+    colorSpace: renderOptions.colorSpace ?? "default",
+    repro: renderOptions.repro ?? false,
+    binariesDirectory: renderOptions.binariesDirectory ?? null,
+    separateAudioTo: renderOptions.separateAudioTo ?? null,
+    forSeamlessAacConcatenation:
+      renderOptions.forSeamlessAacConcatenation ?? false,
+    onBrowserDownload: renderOptions.onBrowserDownload ?? noopOnBrowserDownload,
+    onArtifact: renderOptions.onArtifact ?? null,
+    metadata: renderOptions.metadata ?? null,
+    hardwareAcceleration: renderOptions.hardwareAcceleration ?? "disable",
+    chromeMode: renderOptions.chromeMode ?? "headless-shell",
+    offthreadVideoThreads: renderOptions.offthreadVideoThreads ?? null,
+    compositionStart: renderOptions.compositionStart ?? 0,
+    mediaCacheSizeInBytes: renderOptions.mediaCacheSizeInBytes ?? null,
+    onLog: RenderInternals.defaultOnLog,
+    licenseKey,
+    isProduction: renderOptions.isProduction ?? null,
+    sampleRate:
+      renderOptions.sampleRate ?? composition.defaultSampleRate ?? 48000,
+  });
+}
+
+export function isRemotionServeUrlNoResponseError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes("Visited ") &&
+    error.message.includes("but got no response")
+  );
+}
+
+export function isRetriableRemotionBrowserError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message;
+  if (isRemotionServeUrlNoResponseError(error)) return true;
+
+  const browserLoadError =
+    message.includes("Browser failed to load") ||
+    message.includes("Failed to load resource");
+  const loopbackBundleUrl = /https?:\/\/(?:localhost|127\.0\.0\.1):\d+\//.test(
+    message,
+  );
+  const transientNetworkError = [
+    "ERR_CONNECTION_RESET",
+    "ERR_CONTENT_LENGTH_MISMATCH",
+    "ERR_EMPTY_RESPONSE",
+    "ERR_SOCKET",
+  ].some((fragment) => message.includes(fragment));
+
+  return browserLoadError && loopbackBundleUrl && transientNetworkError;
+}
+
+export async function startRemotionBundleServer(
+  options: StartRemotionBundleServerOptions,
+): Promise<PreparedRemotionBundleServer> {
+  const prepareServer = options.prepareServer ?? RenderInternals.prepareServer;
+  let port = options.port ?? getRemotionBundleServerPort(options.bundleDir);
+  const portRetries = Math.max(1, options.portRetries ?? 12);
+
+  for (let attempt = 0; attempt < portRetries; attempt++) {
+    try {
+      const server = await prepareServer({
+        webpackConfigOrServeUrl: options.bundleDir,
+        port,
+        remotionRoot:
+          options.remotionRoot ?? path.dirname(getRemotionEntryPoint()),
+        offthreadVideoThreads: 0,
+        logLevel: options.logLevel ?? "info",
+        indent: false,
+        offthreadVideoCacheSizeInBytes: null,
+        binariesDirectory: null,
+        forceIPv4: true,
+        sampleRate: options.sampleRate ?? 48000,
+      });
+
+      const serveUrl = normalizeRemotionServeUrl(server.serveUrl);
+      server.serveUrl = serveUrl;
+      const preparedServer: PreparedRemotionBundleServer = {
+        serveUrl,
+        close: async (force: boolean) => {
+          await server.closeServer(force);
+        },
+      };
+      if (isCompleteRemotionServer(server)) {
+        preparedServer.remotionServer = server;
+      }
+
+      return {
+        ...preparedServer,
+      };
+    } catch (error) {
+      if (
+        attempt >= portRetries - 1 ||
+        !isRemotionPortUnavailableError(error)
+      ) {
+        throw error;
+      }
+      port = nextRemotionBundleServerPort(port);
+    }
+  }
+
+  throw new Error("Unable to start Remotion bundle server.");
 }
 
 export async function renderProjectVideoOnly(
   options: RenderProjectVideoOnlyOptions,
 ): Promise<void> {
   const bundleRemotion = options.bundleRemotion ?? bundle;
-  const startBundleServer =
-    options.startBundleServer ?? startRemotionBundleServer;
+  const shouldUseTestServer =
+    !options.startBundleServer &&
+    Boolean(options.selectCompositionFn) &&
+    Boolean(options.renderMediaFn);
   const selectCompositionFn = options.selectCompositionFn ?? selectComposition;
   const renderMediaFn = options.renderMediaFn ?? renderMedia;
+  const renderWithPreparedServer =
+    options.renderWithPreparedServer ??
+    (async ({ server, renderOptions, inputProps }) => {
+      if (options.renderMediaFn) return renderMediaFn(renderOptions);
+      return renderMediaWithPreparedServer({
+        server,
+        renderOptions,
+        inputProps,
+      });
+    });
+  const remotionRenderMaxAttempts = Math.max(
+    1,
+    options.remotionRenderMaxAttempts ?? 3,
+  );
+  const remotionCleanupSettleMs =
+    options.remotionCleanupSettleMs ??
+    (options.selectCompositionFn && options.renderMediaFn ? 0 : 1500);
+  const wait = options.wait ?? sleep;
+  const waitForRemotionCleanup = () => wait(remotionCleanupSettleMs);
   const bundleDir = path.join(options.tempDir, "remotion-bundle");
   const renderProject = prepareProjectForRemotionRender(options.project);
   const frameImageFormat =
@@ -235,23 +812,143 @@ export async function renderProjectVideoOnly(
       publicDir: path.join(options.workspaceDir, "assets"),
     }),
   );
-  const server = await startBundleServer({
-    bundleDir: bundledServeUrl,
-    sampleRate: options.project.exportConfig.audioSampleRate,
-  });
+  const startBundleServer: NonNullable<
+    RenderProjectVideoOnlyOptions["startBundleServer"]
+  > =
+    options.startBundleServer ??
+    (shouldUseTestServer
+      ? async (): Promise<{
+          serveUrl: string;
+          close: (force: boolean) => Promise<void>;
+        }> => ({
+          serveUrl: bundledServeUrl,
+          close: async () => undefined,
+        })
+      : startRemotionBundleServer);
+  let serverStartIndex = 0;
+  let currentServer: PreparedRemotionBundleServer | null = null;
+  let currentComposition: Awaited<ReturnType<typeof selectComposition>> | null =
+    null;
+
+  const closeCurrentServer = async () => {
+    if (!currentServer) return;
+    const serverToClose = currentServer;
+    currentServer = null;
+    currentComposition = null;
+    await serverToClose.close(false);
+  };
+
+  const startServerAndSelectComposition = async (): Promise<{
+    server: PreparedRemotionBundleServer;
+    composition: Awaited<ReturnType<typeof selectComposition>>;
+  }> => {
+    const server = await startBundleServer({
+      bundleDir: bundledServeUrl,
+      port: getRemotionBundleServerPort(bundleDir) + serverStartIndex,
+      sampleRate: options.project.exportConfig.audioSampleRate,
+    });
+    serverStartIndex += 1;
+
+    try {
+      const composition = await timeAsyncStep(
+        "Remotion select composition",
+        () => {
+          const inputProps = { project: renderProject };
+          if (options.selectCompositionFn) {
+            return selectCompositionFn({
+              serveUrl: server.serveUrl,
+              id: "PlaylistVideo",
+              inputProps,
+            });
+          }
+
+          return selectCompositionWithPreparedServer({
+            server: server.remotionServer,
+            serveUrl: server.serveUrl,
+            id: "PlaylistVideo",
+            inputProps,
+            chromiumOptions: remotionChromiumOptions,
+          });
+        },
+      );
+      await waitForRemotionCleanup();
+      currentServer = server;
+      currentComposition = composition;
+      return { server, composition };
+    } catch (error) {
+      await server.close(false);
+      throw error;
+    }
+  };
+
+  const ensureRenderContext = async () => {
+    if (currentServer && currentComposition) {
+      return { server: currentServer, composition: currentComposition };
+    }
+
+    for (let attempt = 0; attempt < remotionRenderMaxAttempts; attempt++) {
+      try {
+        return await startServerAndSelectComposition();
+      } catch (error) {
+        const shouldRetry =
+          attempt < remotionRenderMaxAttempts - 1 &&
+          isRetriableRemotionBrowserError(error);
+        if (!shouldRetry) throw error;
+        await waitForRemotionCleanup();
+        console.info(
+          `[Remotion] Recovered transient browser navigation issue; retrying render (${attempt + 2}/${remotionRenderMaxAttempts}).`,
+        );
+      }
+    }
+
+    throw new Error("Unable to select Remotion composition.");
+  };
 
   try {
-    const composition = await timeAsyncStep("Remotion select composition", () =>
-      selectCompositionFn({
-        serveUrl: server.serveUrl,
-        id: "PlaylistVideo",
-        inputProps: { project: renderProject },
-      }),
+    const { composition } = await ensureRenderContext();
+    const chunkSizeFrames =
+      options.remotionChunkSizeFrames ??
+      Math.max(1, composition.fps * defaultRemotionChunkDurationSeconds);
+    const chunks = buildRemotionFrameChunks(
+      composition.durationInFrames,
+      chunkSizeFrames,
     );
-    await timeAsyncStep("Remotion render video", () =>
-      renderMediaFn({
-        composition,
-        serveUrl: server.serveUrl,
+    const shouldRenderInChunks = chunks.length > 1;
+    const chunkPaths = chunks.map((_, chunkIndex) =>
+      shouldRenderInChunks
+        ? getRemotionChunkPath(options.tempDir, chunkIndex)
+        : options.videoOnlyPath,
+    );
+    const chunkParallelism = shouldRenderInChunks
+      ? Math.min(
+          chunks.length,
+          options.remotionChunkParallelism ?? getRemotionChunkParallelism(),
+        )
+      : 1;
+    const renderConcurrency = shouldRenderInChunks
+      ? (options.remotionChunkConcurrency ?? getRemotionChunkConcurrency())
+      : defaultRemotionRenderConcurrency;
+
+    if (shouldRenderInChunks) {
+      await fs.mkdir(path.dirname(chunkPaths[0]), { recursive: true });
+      console.info(
+        `[Remotion] Rendering video in ${chunks.length} chunks (${chunkSizeFrames} frames per chunk, ${chunkParallelism} chunks in parallel, ${renderConcurrency} concurrency per chunk).`,
+      );
+    }
+
+    const chunkProgress = chunks.map(() => 0);
+
+    const renderChunkAttempt = async (
+      chunkIndex: number,
+      activeComposition: Awaited<ReturnType<typeof selectComposition>>,
+      activeServer: PreparedRemotionBundleServer,
+    ) => {
+      const chunk = chunks[chunkIndex];
+      const outputLocation = chunkPaths[chunkIndex];
+
+      const renderOptions: RenderMediaOptions = {
+        composition: activeComposition,
+        serveUrl: activeServer.serveUrl,
         codec: options.project.exportConfig.videoCodec,
         imageFormat: frameImageFormat,
         ...(frameImageFormat === "jpeg" ? { jpegQuality } : {}),
@@ -259,35 +956,127 @@ export async function renderProjectVideoOnly(
         // `hardwareAcceleration: "required"` for H.264 on Windows before
         // `ffmpegOverride` gets a chance to rewrite the encoder. Keep the
         // renderer path enabled and make NVENC fail-fast through the forced
-        // `-c:v h264_nvenc` override instead of relying on Remotion's platform
-        // hardware-acceleration gate.
+        // `-c:v h264_nvenc` override instead of relying on Remotion's
+        // platform hardware-acceleration gate.
         hardwareAcceleration: "if-possible",
         ...remotionEncoderOptions,
         ...(remotionChromiumOptions
           ? { chromiumOptions: remotionChromiumOptions }
           : {}),
         disallowParallelEncoding: false,
-        concurrency: 16,
-        // Export audio is generated and volume-adjusted by the explicit FFmpeg
-        // audio concat step below, then muxed in the final export stage. Muting
-        // the Remotion render keeps this pass video-only and avoids Remotion's
-        // internal AAC preprocessing from constraining which FFmpeg build can be
-        // used for forced NVENC stitching.
+        concurrency: renderConcurrency,
+        // Export audio is generated and volume-adjusted by the explicit
+        // FFmpeg audio concat step below, then muxed in the final export
+        // stage. Muting the Remotion render keeps this pass video-only and
+        // avoids Remotion's internal AAC preprocessing from constraining
+        // which FFmpeg build can be used for forced NVENC stitching.
         muted: true,
         videoBitrate: `${options.project.exportConfig.videoBitrateKbps}k`,
-        outputLocation: options.videoOnlyPath,
+        outputLocation,
         inputProps: { project: renderProject },
+        ...(shouldRenderInChunks ? { frameRange: chunk } : {}),
         onProgress: ({ progress }) => {
-          options.onProgress?.(progress);
+          const overallProgress = shouldRenderInChunks
+            ? (() => {
+                chunkProgress[chunkIndex] = Math.max(
+                  chunkProgress[chunkIndex] ?? 0,
+                  progress,
+                );
+                return (
+                  chunkProgress.reduce((sum, value) => sum + value, 0) /
+                  chunks.length
+                );
+              })()
+            : progress;
+          options.onProgress?.(overallProgress);
           process.stdout.write(
-            `\r[Remotion] Rendering video ${(progress * 100).toFixed(1)}%`,
+            `\r[Remotion] Rendering video ${(overallProgress * 100).toFixed(
+              1,
+            )}%`,
           );
-          if (progress >= 1) process.stdout.write("\n");
+          if (overallProgress >= 1) process.stdout.write("\n");
         },
-      }),
-    );
+      };
+
+      await timeAsyncStep(
+        shouldRenderInChunks
+          ? `Remotion render video chunk ${chunkIndex + 1}/${chunks.length}`
+          : "Remotion render video",
+        () =>
+          renderWithPreparedServer({
+            server: activeServer.remotionServer,
+            renderOptions,
+            inputProps: { project: renderProject },
+          }),
+      );
+      chunkProgress[chunkIndex] = 1;
+      await waitForRemotionCleanup();
+    };
+
+    const chunkAttempts = chunks.map(() => 0);
+    let pendingChunkIndices = chunks.map((_, chunkIndex) => chunkIndex);
+
+    while (pendingChunkIndices.length > 0) {
+      const { composition: activeComposition, server: activeServer } =
+        await ensureRenderContext();
+      const batch = pendingChunkIndices.slice(0, chunkParallelism);
+      pendingChunkIndices = pendingChunkIndices.slice(chunkParallelism);
+
+      const batchResults = await Promise.all(
+        batch.map(async (chunkIndex) => {
+          try {
+            await renderChunkAttempt(
+              chunkIndex,
+              activeComposition,
+              activeServer,
+            );
+            return { chunkIndex, error: null };
+          } catch (error) {
+            return { chunkIndex, error };
+          }
+        }),
+      );
+
+      const retryChunkIndices: number[] = [];
+      for (const result of batchResults) {
+        if (!result.error) continue;
+
+        const attempt = chunkAttempts[result.chunkIndex];
+        const shouldRetry =
+          attempt < remotionRenderMaxAttempts - 1 &&
+          isRetriableRemotionBrowserError(result.error);
+        if (!shouldRetry) throw result.error;
+
+        chunkAttempts[result.chunkIndex] = attempt + 1;
+        retryChunkIndices.push(result.chunkIndex);
+        console.info(
+          shouldRenderInChunks
+            ? `[Remotion] Recovered transient browser navigation issue; retrying chunk ${result.chunkIndex + 1}/${chunks.length} (${attempt + 2}/${remotionRenderMaxAttempts}).`
+            : `[Remotion] Recovered transient browser navigation issue; retrying render (${attempt + 2}/${remotionRenderMaxAttempts}).`,
+        );
+      }
+
+      if (retryChunkIndices.length > 0) {
+        await waitForRemotionCleanup();
+        await closeCurrentServer();
+        pendingChunkIndices = [...retryChunkIndices, ...pendingChunkIndices];
+      }
+    }
+
+    if (shouldRenderInChunks) {
+      await stitchVideoChunks({
+        tempDir: options.tempDir,
+        chunkPaths,
+        outputPath: options.videoOnlyPath,
+        fps: composition.fps,
+        videoBitrateKbps: options.project.exportConfig.videoBitrateKbps,
+        runFfmpeg: options.runFfmpeg,
+        logInfo: console.info,
+        logWarn: console.warn,
+      });
+    }
   } finally {
-    await server.close(false);
+    await closeCurrentServer();
   }
 }
 
@@ -504,21 +1293,25 @@ function getRemotionBinaryFileName(commandName: "ffmpeg" | "ffprobe"): string {
 }
 
 export function buildAudioFfmpegArgs(
-  concatListPath: string,
+  filePaths: string[],
   concatAudioPath: string,
   exportConfig: ExportConfig,
 ): string[] {
+  if (filePaths.length === 0) {
+    throw new Error("Cannot export audio for an empty playlist.");
+  }
+
+  const inputArgs = filePaths.flatMap((filePath) => ["-i", filePath]);
+  const audioInputs = filePaths.map((_, index) => `[${index}:a:0]`).join("");
+
   return [
     "-y",
     "-stats",
-    "-f",
-    "concat",
-    "-safe",
-    "0",
-    "-i",
-    concatListPath,
+    ...inputArgs,
+    "-filter_complex",
+    `${audioInputs}concat=n=${filePaths.length}:v=0:a=1,volume=${exportConfig.audioVolumePercent / 100}[aout]`,
     "-map",
-    "0:a:0",
+    "[aout]",
     "-vn",
     "-c:a",
     exportConfig.audioCodec,
@@ -528,8 +1321,6 @@ export function buildAudioFfmpegArgs(
     String(exportConfig.audioSampleRate),
     "-ac",
     String(exportConfig.audioChannels),
-    "-filter:a",
-    `volume=${exportConfig.audioVolumePercent / 100}`,
     concatAudioPath,
   ];
 }
@@ -818,7 +1609,6 @@ export async function exportProject(options: {
   await fs.mkdir(tempDir, { recursive: true });
 
   const tracks = [...options.project.tracks].sort((a, b) => a.order - b.order);
-  const concatListPath = path.join(tempDir, "audio-list.txt");
   const concatAudioPath = path.join(tempDir, "audio.m4a");
   const videoOnlyPath = path.join(tempDir, "video.mp4");
   const outputPath = getOutputPath(
@@ -832,20 +1622,17 @@ export async function exportProject(options: {
       execa("ffmpeg", args, getVisibleFfmpegOptions()).then(() => undefined));
   const renderVideoOnly = options.renderVideoOnly ?? renderProjectVideoOnly;
   const finalFfmpegExport = options.finalFfmpegExport ?? runFinalFfmpegExport;
+  let exportCompleted = false;
+  let exportError: unknown;
 
   try {
-    await fs.writeFile(
-      concatListPath,
-      buildFfmpegConcatList(tracks.map((track) => track.sourcePath)),
-      "utf8",
-    );
     console.info(
-      "[FFmpeg] Concatenating playlist audio. FFmpeg progress is shown below.",
+      "[FFmpeg] Decoding and concatenating playlist audio. FFmpeg progress is shown below.",
     );
     await timeAsyncStep("FFmpeg audio concat/transcode", () =>
       runFfmpeg(
         buildAudioFfmpegArgs(
-          concatListPath,
+          tracks.map((track) => track.sourcePath),
           concatAudioPath,
           options.project.exportConfig,
         ),
@@ -873,11 +1660,15 @@ export async function exportProject(options: {
       }),
     );
     options.onProgress?.(1);
+    exportCompleted = true;
     return { outputPath };
+  } catch (error) {
+    exportError = error;
+    throw error;
   } finally {
     if (!options.keepTempFiles) {
       await timeAsyncStep("Temp cleanup", () =>
-        fs.rm(tempDir, { recursive: true, force: true }),
+        cleanupTempDir(tempDir, { exportCompleted, exportError }),
       );
     }
   }
