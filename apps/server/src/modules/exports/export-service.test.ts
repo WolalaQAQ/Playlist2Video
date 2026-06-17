@@ -8,9 +8,15 @@ import {
   buildFfmpegConcatList,
   buildFinalFfmpegArgs,
   buildFinalFfmpegCopyArgs,
+  buildRemotionFrameChunks,
+  buildVideoChunkConcatArgs,
+  buildVideoChunkConcatFallbackArgs,
   cleanupTempDir,
   detectH264HardwareEncoder,
   exportProject,
+  getRemotionChunkConcurrency,
+  getRemotionChunkParallelism,
+  getRemotionChunkPath,
   normalizeRemotionServeUrl,
   prepareProjectForRemotionRender,
   renderProjectVideoOnly,
@@ -194,6 +200,121 @@ it("preserves dense spectrum frames so exported visuals match preview behavior",
   expect(prepared.tracks[0].spectrumFrames?.at(-1)?.[0]).toBeGreaterThan(0.95);
 });
 
+it("builds inclusive Remotion frame chunks that cover every frame exactly once", () => {
+  expect(buildRemotionFrameChunks(1, 30)).toEqual([[0, 0]]);
+  expect(buildRemotionFrameChunks(30, 30)).toEqual([[0, 29]]);
+  expect(buildRemotionFrameChunks(31, 30)).toEqual([
+    [0, 29],
+    [30, 30],
+  ]);
+  expect(buildRemotionFrameChunks(75, 30)).toEqual([
+    [0, 29],
+    [30, 59],
+    [60, 74],
+  ]);
+  expect(() => buildRemotionFrameChunks(0, 30)).toThrow(/totalFrames/);
+  expect(() => buildRemotionFrameChunks(30, 0)).toThrow(/chunkSizeFrames/);
+
+  const covered = buildRemotionFrameChunks(75, 30).flatMap(([start, end]) =>
+    Array.from({ length: end - start + 1 }, (_, index) => start + index),
+  );
+  expect(covered).toEqual(Array.from({ length: 75 }, (_, index) => index));
+});
+
+it("builds stable Remotion chunk paths and FFmpeg stream-copy concat args", () => {
+  expect(getRemotionChunkPath("C:/tmp/export-123", 2)).toBe(
+    path.join("C:/tmp/export-123", "remotion-video-chunks", "chunk-0003.mp4"),
+  );
+
+  expect(
+    buildVideoChunkConcatArgs({
+      concatListPath: "C:/tmp/export-123/video-chunks.txt",
+      outputPath: "C:/tmp/export-123/video.mp4",
+      fps: 30,
+    }),
+  ).toEqual([
+    "-y",
+    "-stats",
+    "-f",
+    "concat",
+    "-safe",
+    "0",
+    "-i",
+    "C:/tmp/export-123/video-chunks.txt",
+    "-an",
+    "-c:v",
+    "copy",
+    "-r",
+    "30",
+    "-movflags",
+    "faststart",
+    "C:/tmp/export-123/video.mp4",
+  ]);
+});
+
+it("reads Remotion chunk parallelism and per-chunk concurrency from environment", () => {
+  expect(getRemotionChunkParallelism({})).toBe(8);
+  expect(getRemotionChunkConcurrency({})).toBe(2);
+  expect(
+    getRemotionChunkParallelism({
+      PLAYLIST2VIDEO_REMOTION_CHUNK_PARALLELISM: "4",
+    }),
+  ).toBe(4);
+  expect(
+    getRemotionChunkConcurrency({
+      PLAYLIST2VIDEO_REMOTION_CHUNK_CONCURRENCY: "6",
+    }),
+  ).toBe(6);
+  expect(() =>
+    getRemotionChunkParallelism({
+      PLAYLIST2VIDEO_REMOTION_CHUNK_PARALLELISM: "0",
+    }),
+  ).toThrow(/positive integer/);
+  expect(() =>
+    getRemotionChunkConcurrency({
+      PLAYLIST2VIDEO_REMOTION_CHUNK_CONCURRENCY: "x",
+    }),
+  ).toThrow(/positive integer/);
+});
+
+it("builds FFmpeg concat filter fallback args for video chunk stitching", () => {
+  expect(
+    buildVideoChunkConcatFallbackArgs({
+      chunkPaths: ["chunk-1.mp4", "chunk-2.mp4", "chunk-3.mp4"],
+      outputPath: "out.mp4",
+      fps: 30,
+      videoBitrateKbps: 12000,
+    }),
+  ).toEqual([
+    "-y",
+    "-stats",
+    "-i",
+    "chunk-1.mp4",
+    "-i",
+    "chunk-2.mp4",
+    "-i",
+    "chunk-3.mp4",
+    "-filter_complex",
+    "[0:v:0][1:v:0][2:v:0]concat=n=3:v=1:a=0[vout]",
+    "-map",
+    "[vout]",
+    "-an",
+    "-c:v",
+    "libx264",
+    "-b:v",
+    "12000k",
+    "-preset",
+    "medium",
+    "-pix_fmt",
+    "yuv420p",
+    "-r",
+    "30",
+    "-movflags",
+    "faststart",
+    "out.mp4",
+  ]);
+});
+
 it("renders Remotion through one stable bundle server while preserving render parallelism", async () => {
   const project = createTestProject();
   const selectedServeUrls: string[] = [];
@@ -282,6 +403,354 @@ it("renders Remotion through one stable bundle server while preserving render pa
   });
   expect(selectedComposition).toBe(true);
   expect(closed).toEqual([false]);
+});
+
+it("keeps single-chunk Remotion renders unsegmented and does not invoke chunk stitching", async () => {
+  const project = createTestProject();
+  let renderOptions: { frameRange?: unknown; outputLocation?: string | null } =
+    {};
+  let stitchInvoked = false;
+
+  await renderProjectVideoOnly({
+    project,
+    workspaceDir: "C:/workspace",
+    tempDir: "C:/workspace/.tmp/export-123",
+    videoOnlyPath: "C:/workspace/.tmp/export-123/video.mp4",
+    remotionChunkSizeFrames: 120,
+    bundleRemotion: async (options) => String(options.outDir),
+    startBundleServer: async () => ({
+      serveUrl: "http://127.0.0.1:36500/",
+      close: async () => undefined,
+    }),
+    selectCompositionFn: async () => createTestComposition(project, 30),
+    renderMediaFn: async (options) => {
+      renderOptions = options;
+      return { buffer: null, slowestFrames: [], contentType: "video/mp4" };
+    },
+    runFfmpeg: async () => {
+      stitchInvoked = true;
+    },
+  });
+
+  expect(renderOptions).not.toHaveProperty("frameRange");
+  expect(renderOptions.outputLocation).toBe(
+    "C:/workspace/.tmp/export-123/video.mp4",
+  );
+  expect(stitchInvoked).toBe(false);
+});
+
+it("renders multi-chunk Remotion frame ranges and stitches completed chunks in order", async () => {
+  const workspaceDir = await fs.mkdtemp(
+    path.join(process.cwd(), ".tmp-segment-render-test-"),
+  );
+  const tempDir = path.join(workspaceDir, ".tmp", "export-123");
+  const videoOnlyPath = path.join(tempDir, "video.mp4");
+  const project = createTestProject();
+  const renderOptions: Array<{
+    frameRange?: unknown;
+    outputLocation?: string | null;
+    concurrency?: unknown;
+    disallowParallelEncoding?: unknown;
+  }> = [];
+  const concatArgs: string[][] = [];
+  const concatLists: string[] = [];
+
+  try {
+    await fs.mkdir(tempDir, { recursive: true });
+    await renderProjectVideoOnly({
+      project,
+      workspaceDir,
+      tempDir,
+      videoOnlyPath,
+      remotionChunkSizeFrames: 30,
+      bundleRemotion: async (options) => String(options.outDir),
+      startBundleServer: async () => ({
+        serveUrl: "http://127.0.0.1:36500/",
+        close: async () => undefined,
+      }),
+      selectCompositionFn: async () => createTestComposition(project, 75),
+      renderMediaFn: async (options) => {
+        renderOptions.push(options);
+        await fs.mkdir(path.dirname(String(options.outputLocation)), {
+          recursive: true,
+        });
+        await fs.writeFile(String(options.outputLocation), "chunk");
+        options.onProgress?.({
+          renderedFrames: 30,
+          encodedFrames: 30,
+          encodedDoneIn: 1,
+          renderedDoneIn: 1,
+          renderEstimatedTime: 0,
+          progress: 1,
+          stitchStage: "encoding",
+        });
+        return { buffer: null, slowestFrames: [], contentType: "video/mp4" };
+      },
+      runFfmpeg: async (args) => {
+        concatArgs.push(args);
+        const listPath = args[args.indexOf("-i") + 1];
+        concatLists.push(await fs.readFile(listPath, "utf8"));
+        await fs.writeFile(videoOnlyPath, "stitched");
+      },
+    });
+
+    expect(renderOptions.map((options) => options.frameRange)).toEqual([
+      [0, 29],
+      [30, 59],
+      [60, 74],
+    ]);
+    expect(renderOptions.map((options) => options.outputLocation)).toEqual([
+      getRemotionChunkPath(tempDir, 0),
+      getRemotionChunkPath(tempDir, 1),
+      getRemotionChunkPath(tempDir, 2),
+    ]);
+    expect(
+      renderOptions.every(
+        (options) =>
+          options.concurrency === 2 &&
+          options.disallowParallelEncoding === false,
+      ),
+    ).toBe(true);
+    expect(concatArgs).toHaveLength(1);
+    expect(concatLists).toEqual([
+      buildFfmpegConcatList([
+        getRemotionChunkPath(tempDir, 0),
+        getRemotionChunkPath(tempDir, 1),
+        getRemotionChunkPath(tempDir, 2),
+      ]),
+    ]);
+  } finally {
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+  }
+});
+
+it("renders segmented Remotion chunks in parallel with lower per-chunk concurrency by default", async () => {
+  const workspaceDir = await fs.mkdtemp(
+    path.join(process.cwd(), ".tmp-segment-parallel-test-"),
+  );
+  const tempDir = path.join(workspaceDir, ".tmp", "export-123");
+  const videoOnlyPath = path.join(tempDir, "video.mp4");
+  const project = createTestProject();
+  const renderOptions: Array<{
+    frameRange?: unknown;
+    concurrency?: unknown;
+  }> = [];
+  let activeRenders = 0;
+  let maxActiveRenders = 0;
+
+  try {
+    await fs.mkdir(tempDir, { recursive: true });
+    await renderProjectVideoOnly({
+      project,
+      workspaceDir,
+      tempDir,
+      videoOnlyPath,
+      remotionChunkSizeFrames: 30,
+      bundleRemotion: async (options) => String(options.outDir),
+      startBundleServer: async () => ({
+        serveUrl: "http://127.0.0.1:36500/",
+        close: async () => undefined,
+      }),
+      selectCompositionFn: async () => createTestComposition(project, 120),
+      renderMediaFn: async (options) => {
+        renderOptions.push(options);
+        activeRenders += 1;
+        maxActiveRenders = Math.max(maxActiveRenders, activeRenders);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        activeRenders -= 1;
+        await fs.mkdir(path.dirname(String(options.outputLocation)), {
+          recursive: true,
+        });
+        await fs.writeFile(String(options.outputLocation), "chunk");
+        return { buffer: null, slowestFrames: [], contentType: "video/mp4" };
+      },
+      runFfmpeg: async () => {
+        await fs.writeFile(videoOnlyPath, "stitched");
+      },
+    });
+
+    expect(renderOptions.map((options) => options.frameRange)).toEqual([
+      [0, 29],
+      [30, 59],
+      [60, 89],
+      [90, 119],
+    ]);
+    expect(maxActiveRenders).toBe(4);
+    expect(renderOptions.map((options) => options.concurrency)).toEqual([
+      2, 2, 2, 2,
+    ]);
+  } finally {
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+  }
+});
+
+it("retries only a failed Remotion chunk without re-rendering completed chunks", async () => {
+  const workspaceDir = await fs.mkdtemp(
+    path.join(process.cwd(), ".tmp-segment-retry-test-"),
+  );
+  const tempDir = path.join(workspaceDir, ".tmp", "export-123");
+  const videoOnlyPath = path.join(tempDir, "video.mp4");
+  const project = createTestProject();
+  const startedServeUrls: string[] = [];
+  const closedServeUrls: string[] = [];
+  const attemptedRanges: unknown[] = [];
+  let secondChunkAttempts = 0;
+  let concatCalls = 0;
+
+  try {
+    await fs.mkdir(tempDir, { recursive: true });
+    await renderProjectVideoOnly({
+      project,
+      workspaceDir,
+      tempDir,
+      videoOnlyPath,
+      remotionChunkSizeFrames: 30,
+      bundleRemotion: async (options) => String(options.outDir),
+      startBundleServer: async () => {
+        const serveUrl = `http://127.0.0.1:${36500 + startedServeUrls.length}/`;
+        startedServeUrls.push(serveUrl);
+        return {
+          serveUrl,
+          close: async () => {
+            closedServeUrls.push(serveUrl);
+          },
+        };
+      },
+      selectCompositionFn: async () => createTestComposition(project, 75),
+      renderMediaFn: async (options) => {
+        attemptedRanges.push(options.frameRange);
+        if (JSON.stringify(options.frameRange) === "[30,59]") {
+          secondChunkAttempts += 1;
+          if (secondChunkAttempts === 1) {
+            throw new Error(
+              `Visited "${options.serveUrl}index.html" but got no response.`,
+            );
+          }
+        }
+        await fs.mkdir(path.dirname(String(options.outputLocation)), {
+          recursive: true,
+        });
+        await fs.writeFile(String(options.outputLocation), "chunk");
+        return { buffer: null, slowestFrames: [], contentType: "video/mp4" };
+      },
+      runFfmpeg: async () => {
+        concatCalls += 1;
+        await fs.writeFile(videoOnlyPath, "stitched");
+      },
+    });
+
+    expect(attemptedRanges).toEqual([
+      [0, 29],
+      [30, 59],
+      [60, 74],
+      [30, 59],
+    ]);
+    expect(startedServeUrls).toHaveLength(2);
+    expect(closedServeUrls).toEqual(startedServeUrls);
+    expect(concatCalls).toBe(1);
+  } finally {
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+  }
+});
+
+it("does not retry or stitch chunks after a non-retryable Remotion render error", async () => {
+  const workspaceDir = await fs.mkdtemp(
+    path.join(process.cwd(), ".tmp-segment-nonretry-test-"),
+  );
+  const tempDir = path.join(workspaceDir, ".tmp", "export-123");
+  const project = createTestProject();
+  const attemptedRanges: unknown[] = [];
+  let concatCalls = 0;
+
+  try {
+    await fs.mkdir(tempDir, { recursive: true });
+    await expect(
+      renderProjectVideoOnly({
+        project,
+        workspaceDir,
+        tempDir,
+        videoOnlyPath: path.join(tempDir, "video.mp4"),
+        remotionChunkSizeFrames: 30,
+        bundleRemotion: async (options) => String(options.outDir),
+        startBundleServer: async () => ({
+          serveUrl: "http://127.0.0.1:36500/",
+          close: async () => undefined,
+        }),
+        selectCompositionFn: async () => createTestComposition(project, 75),
+        renderMediaFn: async (options) => {
+          attemptedRanges.push(options.frameRange);
+          if (JSON.stringify(options.frameRange) === "[30,59]") {
+            throw new Error("template bug");
+          }
+          await fs.mkdir(path.dirname(String(options.outputLocation)), {
+            recursive: true,
+          });
+          await fs.writeFile(String(options.outputLocation), "chunk");
+          return { buffer: null, slowestFrames: [], contentType: "video/mp4" };
+        },
+        runFfmpeg: async () => {
+          concatCalls += 1;
+        },
+      }),
+    ).rejects.toThrow("template bug");
+
+    expect(attemptedRanges).toEqual([
+      [0, 29],
+      [30, 59],
+      [60, 74],
+    ]);
+    expect(concatCalls).toBe(0);
+  } finally {
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+  }
+});
+
+it("falls back to FFmpeg concat filter re-encoding if stream-copy chunk stitching fails", async () => {
+  const workspaceDir = await fs.mkdtemp(
+    path.join(process.cwd(), ".tmp-segment-stitch-fallback-test-"),
+  );
+  const tempDir = path.join(workspaceDir, ".tmp", "export-123");
+  const videoOnlyPath = path.join(tempDir, "video.mp4");
+  const project = createTestProject();
+  const concatCalls: string[][] = [];
+
+  try {
+    await fs.mkdir(tempDir, { recursive: true });
+    await renderProjectVideoOnly({
+      project,
+      workspaceDir,
+      tempDir,
+      videoOnlyPath,
+      remotionChunkSizeFrames: 30,
+      bundleRemotion: async (options) => String(options.outDir),
+      startBundleServer: async () => ({
+        serveUrl: "http://127.0.0.1:36500/",
+        close: async () => undefined,
+      }),
+      selectCompositionFn: async () => createTestComposition(project, 75),
+      renderMediaFn: async (options) => {
+        await fs.mkdir(path.dirname(String(options.outputLocation)), {
+          recursive: true,
+        });
+        await fs.writeFile(String(options.outputLocation), "chunk");
+        return { buffer: null, slowestFrames: [], contentType: "video/mp4" };
+      },
+      runFfmpeg: async (args) => {
+        concatCalls.push(args);
+        if (concatCalls.length === 1) {
+          throw new Error("copy concat failed");
+        }
+        await fs.writeFile(videoOnlyPath, "stitched");
+      },
+    });
+
+    expect(concatCalls).toHaveLength(2);
+    expect(concatCalls[0]).toContain("copy");
+    expect(concatCalls[1].join(" ")).toContain("concat=n=3:v=1:a=0[vout]");
+    expect(concatCalls[1]).toContain("libx264");
+  } finally {
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+  }
 });
 
 it("keeps Remotion render concurrency enabled for long playlists", async () => {
@@ -1951,6 +2420,24 @@ function createTestProject(): Project {
     },
     createdAt: "2026-06-16T00:00:00.000Z",
     updatedAt: "2026-06-16T00:00:00.000Z",
+  };
+}
+
+function createTestComposition(project: Project, durationInFrames = 30) {
+  return {
+    id: "PlaylistVideo",
+    width: project.exportConfig.width,
+    height: project.exportConfig.height,
+    fps: project.exportConfig.fps,
+    durationInFrames,
+    props: {},
+    defaultProps: {},
+    defaultCodec: null,
+    defaultOutName: null,
+    defaultVideoImageFormat: null,
+    defaultPixelFormat: null,
+    defaultProResProfile: null,
+    defaultSampleRate: null,
   };
 }
 

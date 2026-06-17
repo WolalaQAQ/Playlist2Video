@@ -85,6 +85,10 @@ export interface RenderProjectVideoOnlyOptions {
   tempDir: string;
   videoOnlyPath: string;
   onProgress?: (progress: number) => void;
+  remotionChunkSizeFrames?: number;
+  remotionChunkParallelism?: number;
+  remotionChunkConcurrency?: number;
+  runFfmpeg?: (args: string[]) => Promise<void>;
   bundleRemotion?: (options: BundleOptions) => Promise<string>;
   startBundleServer?: (
     options: StartRemotionBundleServerOptions,
@@ -171,6 +175,11 @@ function sleep(milliseconds: number): Promise<void> {
   if (milliseconds <= 0) return Promise.resolve();
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
+
+const defaultRemotionChunkDurationSeconds = 60;
+const defaultRemotionRenderConcurrency = 16;
+const defaultRemotionChunkParallelism = 8;
+const defaultRemotionChunkConcurrency = 2;
 
 function isRetriableCleanupError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
@@ -263,6 +272,205 @@ export function buildFfmpegConcatList(filePaths: string[]): string {
     filePaths
       .map((filePath) => `file '${escapeFfmpegConcatPath(filePath)}'`)
       .join("\n") + "\n"
+  );
+}
+
+export type RemotionFrameChunk = [start: number, end: number];
+
+export function buildRemotionFrameChunks(
+  totalFrames: number,
+  chunkSizeFrames: number,
+): RemotionFrameChunk[] {
+  if (!Number.isInteger(totalFrames) || totalFrames <= 0) {
+    throw new Error(
+      `totalFrames must be a positive integer, got ${totalFrames}.`,
+    );
+  }
+  if (!Number.isInteger(chunkSizeFrames) || chunkSizeFrames <= 0) {
+    throw new Error(
+      `chunkSizeFrames must be a positive integer, got ${chunkSizeFrames}.`,
+    );
+  }
+
+  const chunks: RemotionFrameChunk[] = [];
+  for (let start = 0; start < totalFrames; start += chunkSizeFrames) {
+    chunks.push([
+      start,
+      Math.min(totalFrames - 1, start + chunkSizeFrames - 1),
+    ]);
+  }
+  return chunks;
+}
+
+export function getRemotionChunkParallelism(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  return parsePositiveIntegerEnv(
+    env.PLAYLIST2VIDEO_REMOTION_CHUNK_PARALLELISM,
+    "PLAYLIST2VIDEO_REMOTION_CHUNK_PARALLELISM",
+    defaultRemotionChunkParallelism,
+  );
+}
+
+export function getRemotionChunkConcurrency(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  return parsePositiveIntegerEnv(
+    env.PLAYLIST2VIDEO_REMOTION_CHUNK_CONCURRENCY,
+    "PLAYLIST2VIDEO_REMOTION_CHUNK_CONCURRENCY",
+    defaultRemotionChunkConcurrency,
+  );
+}
+
+function parsePositiveIntegerEnv(
+  value: string | undefined,
+  name: string,
+  fallback: number,
+): number {
+  if (value === undefined || value.trim() === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer, got "${value}".`);
+  }
+  return parsed;
+}
+
+export function getRemotionChunkPath(
+  tempDir: string,
+  chunkIndex: number,
+): string {
+  if (!Number.isInteger(chunkIndex) || chunkIndex < 0) {
+    throw new Error(
+      `chunkIndex must be a non-negative integer, got ${chunkIndex}.`,
+    );
+  }
+
+  return path.join(
+    tempDir,
+    "remotion-video-chunks",
+    `chunk-${String(chunkIndex + 1).padStart(4, "0")}.mp4`,
+  );
+}
+
+export function buildVideoChunkConcatArgs(options: {
+  concatListPath: string;
+  outputPath: string;
+  fps: number;
+}): string[] {
+  return [
+    "-y",
+    "-stats",
+    "-f",
+    "concat",
+    "-safe",
+    "0",
+    "-i",
+    options.concatListPath,
+    "-an",
+    "-c:v",
+    "copy",
+    "-r",
+    String(options.fps),
+    "-movflags",
+    "faststart",
+    options.outputPath,
+  ];
+}
+
+export function buildVideoChunkConcatFallbackArgs(options: {
+  chunkPaths: string[];
+  outputPath: string;
+  fps: number;
+  videoBitrateKbps: number;
+}): string[] {
+  if (options.chunkPaths.length === 0) {
+    throw new Error("Cannot stitch an empty list of video chunks.");
+  }
+
+  const inputArgs = options.chunkPaths.flatMap((chunkPath) => [
+    "-i",
+    chunkPath,
+  ]);
+  const videoInputs = options.chunkPaths
+    .map((_, index) => `[${index}:v:0]`)
+    .join("");
+
+  return [
+    "-y",
+    "-stats",
+    ...inputArgs,
+    "-filter_complex",
+    `${videoInputs}concat=n=${options.chunkPaths.length}:v=1:a=0[vout]`,
+    "-map",
+    "[vout]",
+    "-an",
+    "-c:v",
+    "libx264",
+    "-b:v",
+    `${options.videoBitrateKbps}k`,
+    "-preset",
+    "medium",
+    "-pix_fmt",
+    "yuv420p",
+    "-r",
+    String(options.fps),
+    "-movflags",
+    "faststart",
+    options.outputPath,
+  ];
+}
+
+async function stitchVideoChunks(options: {
+  tempDir: string;
+  chunkPaths: string[];
+  outputPath: string;
+  fps: number;
+  videoBitrateKbps: number;
+  runFfmpeg?: (args: string[]) => Promise<void>;
+  logInfo?: (message: string) => void;
+  logWarn?: (message: string) => void;
+}): Promise<void> {
+  if (options.chunkPaths.length === 0) {
+    throw new Error("Cannot stitch an empty list of Remotion video chunks.");
+  }
+
+  if (options.chunkPaths.length === 1) {
+    await fs.copyFile(options.chunkPaths[0], options.outputPath);
+    return;
+  }
+
+  const runFfmpeg =
+    options.runFfmpeg ??
+    ((args: string[]) =>
+      execa("ffmpeg", args, getVisibleFfmpegOptions()).then(() => undefined));
+  const concatListPath = path.join(options.tempDir, "video-chunks.txt");
+  await fs.writeFile(concatListPath, buildFfmpegConcatList(options.chunkPaths));
+
+  options.logInfo?.(
+    "[FFmpeg] Stitching segmented Remotion video chunks with stream copy.",
+  );
+  try {
+    await runFfmpeg(
+      buildVideoChunkConcatArgs({
+        concatListPath,
+        outputPath: options.outputPath,
+        fps: options.fps,
+      }),
+    );
+    return;
+  } catch {
+    options.logWarn?.(
+      "[FFmpeg] Stream-copy chunk stitching failed. Falling back to concat filter re-encode.",
+    );
+  }
+
+  await runFfmpeg(
+    buildVideoChunkConcatFallbackArgs({
+      chunkPaths: options.chunkPaths,
+      outputPath: options.outputPath,
+      fps: options.fps,
+      videoBitrateKbps: options.videoBitrateKbps,
+    }),
   );
 }
 
@@ -617,12 +825,29 @@ export async function renderProjectVideoOnly(
           close: async () => undefined,
         })
       : startRemotionBundleServer);
-  for (let attempt = 0; attempt < remotionRenderMaxAttempts; attempt++) {
+  let serverStartIndex = 0;
+  let currentServer: PreparedRemotionBundleServer | null = null;
+  let currentComposition: Awaited<ReturnType<typeof selectComposition>> | null =
+    null;
+
+  const closeCurrentServer = async () => {
+    if (!currentServer) return;
+    const serverToClose = currentServer;
+    currentServer = null;
+    currentComposition = null;
+    await serverToClose.close(false);
+  };
+
+  const startServerAndSelectComposition = async (): Promise<{
+    server: PreparedRemotionBundleServer;
+    composition: Awaited<ReturnType<typeof selectComposition>>;
+  }> => {
     const server = await startBundleServer({
       bundleDir: bundledServeUrl,
-      port: getRemotionBundleServerPort(bundleDir) + attempt,
+      port: getRemotionBundleServerPort(bundleDir) + serverStartIndex,
       sampleRate: options.project.exportConfig.audioSampleRate,
     });
+    serverStartIndex += 1;
 
     try {
       const composition = await timeAsyncStep(
@@ -647,9 +872,83 @@ export async function renderProjectVideoOnly(
         },
       );
       await waitForRemotionCleanup();
+      currentServer = server;
+      currentComposition = composition;
+      return { server, composition };
+    } catch (error) {
+      await server.close(false);
+      throw error;
+    }
+  };
+
+  const ensureRenderContext = async () => {
+    if (currentServer && currentComposition) {
+      return { server: currentServer, composition: currentComposition };
+    }
+
+    for (let attempt = 0; attempt < remotionRenderMaxAttempts; attempt++) {
+      try {
+        return await startServerAndSelectComposition();
+      } catch (error) {
+        const shouldRetry =
+          attempt < remotionRenderMaxAttempts - 1 &&
+          isRetriableRemotionBrowserError(error);
+        if (!shouldRetry) throw error;
+        await waitForRemotionCleanup();
+        console.info(
+          `[Remotion] Recovered transient browser navigation issue; retrying render (${attempt + 2}/${remotionRenderMaxAttempts}).`,
+        );
+      }
+    }
+
+    throw new Error("Unable to select Remotion composition.");
+  };
+
+  try {
+    const { composition } = await ensureRenderContext();
+    const chunkSizeFrames =
+      options.remotionChunkSizeFrames ??
+      Math.max(1, composition.fps * defaultRemotionChunkDurationSeconds);
+    const chunks = buildRemotionFrameChunks(
+      composition.durationInFrames,
+      chunkSizeFrames,
+    );
+    const shouldRenderInChunks = chunks.length > 1;
+    const chunkPaths = chunks.map((_, chunkIndex) =>
+      shouldRenderInChunks
+        ? getRemotionChunkPath(options.tempDir, chunkIndex)
+        : options.videoOnlyPath,
+    );
+    const chunkParallelism = shouldRenderInChunks
+      ? Math.min(
+          chunks.length,
+          options.remotionChunkParallelism ?? getRemotionChunkParallelism(),
+        )
+      : 1;
+    const renderConcurrency = shouldRenderInChunks
+      ? (options.remotionChunkConcurrency ?? getRemotionChunkConcurrency())
+      : defaultRemotionRenderConcurrency;
+
+    if (shouldRenderInChunks) {
+      await fs.mkdir(path.dirname(chunkPaths[0]), { recursive: true });
+      console.info(
+        `[Remotion] Rendering video in ${chunks.length} chunks (${chunkSizeFrames} frames per chunk, ${chunkParallelism} chunks in parallel, ${renderConcurrency} concurrency per chunk).`,
+      );
+    }
+
+    const chunkProgress = chunks.map(() => 0);
+
+    const renderChunkAttempt = async (
+      chunkIndex: number,
+      activeComposition: Awaited<ReturnType<typeof selectComposition>>,
+      activeServer: PreparedRemotionBundleServer,
+    ) => {
+      const chunk = chunks[chunkIndex];
+      const outputLocation = chunkPaths[chunkIndex];
+
       const renderOptions: RenderMediaOptions = {
-        composition,
-        serveUrl: server.serveUrl,
+        composition: activeComposition,
+        serveUrl: activeServer.serveUrl,
         codec: options.project.exportConfig.videoCodec,
         imageFormat: frameImageFormat,
         ...(frameImageFormat === "jpeg" ? { jpegQuality } : {}),
@@ -657,53 +956,127 @@ export async function renderProjectVideoOnly(
         // `hardwareAcceleration: "required"` for H.264 on Windows before
         // `ffmpegOverride` gets a chance to rewrite the encoder. Keep the
         // renderer path enabled and make NVENC fail-fast through the forced
-        // `-c:v h264_nvenc` override instead of relying on Remotion's platform
-        // hardware-acceleration gate.
+        // `-c:v h264_nvenc` override instead of relying on Remotion's
+        // platform hardware-acceleration gate.
         hardwareAcceleration: "if-possible",
         ...remotionEncoderOptions,
         ...(remotionChromiumOptions
           ? { chromiumOptions: remotionChromiumOptions }
           : {}),
         disallowParallelEncoding: false,
-        concurrency: 16,
-        // Export audio is generated and volume-adjusted by the explicit FFmpeg
-        // audio concat step below, then muxed in the final export stage. Muting
-        // the Remotion render keeps this pass video-only and avoids Remotion's
-        // internal AAC preprocessing from constraining which FFmpeg build can be
-        // used for forced NVENC stitching.
+        concurrency: renderConcurrency,
+        // Export audio is generated and volume-adjusted by the explicit
+        // FFmpeg audio concat step below, then muxed in the final export
+        // stage. Muting the Remotion render keeps this pass video-only and
+        // avoids Remotion's internal AAC preprocessing from constraining
+        // which FFmpeg build can be used for forced NVENC stitching.
         muted: true,
         videoBitrate: `${options.project.exportConfig.videoBitrateKbps}k`,
-        outputLocation: options.videoOnlyPath,
+        outputLocation,
         inputProps: { project: renderProject },
+        ...(shouldRenderInChunks ? { frameRange: chunk } : {}),
         onProgress: ({ progress }) => {
-          options.onProgress?.(progress);
+          const overallProgress = shouldRenderInChunks
+            ? (() => {
+                chunkProgress[chunkIndex] = Math.max(
+                  chunkProgress[chunkIndex] ?? 0,
+                  progress,
+                );
+                return (
+                  chunkProgress.reduce((sum, value) => sum + value, 0) /
+                  chunks.length
+                );
+              })()
+            : progress;
+          options.onProgress?.(overallProgress);
           process.stdout.write(
-            `\r[Remotion] Rendering video ${(progress * 100).toFixed(1)}%`,
+            `\r[Remotion] Rendering video ${(overallProgress * 100).toFixed(
+              1,
+            )}%`,
           );
-          if (progress >= 1) process.stdout.write("\n");
+          if (overallProgress >= 1) process.stdout.write("\n");
         },
       };
-      await timeAsyncStep("Remotion render video", () =>
-        renderWithPreparedServer({
-          server: server.remotionServer,
-          renderOptions,
-          inputProps: { project: renderProject },
+
+      await timeAsyncStep(
+        shouldRenderInChunks
+          ? `Remotion render video chunk ${chunkIndex + 1}/${chunks.length}`
+          : "Remotion render video",
+        () =>
+          renderWithPreparedServer({
+            server: activeServer.remotionServer,
+            renderOptions,
+            inputProps: { project: renderProject },
+          }),
+      );
+      chunkProgress[chunkIndex] = 1;
+      await waitForRemotionCleanup();
+    };
+
+    const chunkAttempts = chunks.map(() => 0);
+    let pendingChunkIndices = chunks.map((_, chunkIndex) => chunkIndex);
+
+    while (pendingChunkIndices.length > 0) {
+      const { composition: activeComposition, server: activeServer } =
+        await ensureRenderContext();
+      const batch = pendingChunkIndices.slice(0, chunkParallelism);
+      pendingChunkIndices = pendingChunkIndices.slice(chunkParallelism);
+
+      const batchResults = await Promise.all(
+        batch.map(async (chunkIndex) => {
+          try {
+            await renderChunkAttempt(
+              chunkIndex,
+              activeComposition,
+              activeServer,
+            );
+            return { chunkIndex, error: null };
+          } catch (error) {
+            return { chunkIndex, error };
+          }
         }),
       );
-      await waitForRemotionCleanup();
-      return;
-    } catch (error) {
-      const shouldRetry =
-        attempt < remotionRenderMaxAttempts - 1 &&
-        isRetriableRemotionBrowserError(error);
-      if (!shouldRetry) throw error;
-      await waitForRemotionCleanup();
-      console.info(
-        `[Remotion] Recovered transient browser navigation issue; retrying render (${attempt + 2}/${remotionRenderMaxAttempts}).`,
-      );
-    } finally {
-      await server.close(false);
+
+      const retryChunkIndices: number[] = [];
+      for (const result of batchResults) {
+        if (!result.error) continue;
+
+        const attempt = chunkAttempts[result.chunkIndex];
+        const shouldRetry =
+          attempt < remotionRenderMaxAttempts - 1 &&
+          isRetriableRemotionBrowserError(result.error);
+        if (!shouldRetry) throw result.error;
+
+        chunkAttempts[result.chunkIndex] = attempt + 1;
+        retryChunkIndices.push(result.chunkIndex);
+        console.info(
+          shouldRenderInChunks
+            ? `[Remotion] Recovered transient browser navigation issue; retrying chunk ${result.chunkIndex + 1}/${chunks.length} (${attempt + 2}/${remotionRenderMaxAttempts}).`
+            : `[Remotion] Recovered transient browser navigation issue; retrying render (${attempt + 2}/${remotionRenderMaxAttempts}).`,
+        );
+      }
+
+      if (retryChunkIndices.length > 0) {
+        await waitForRemotionCleanup();
+        await closeCurrentServer();
+        pendingChunkIndices = [...retryChunkIndices, ...pendingChunkIndices];
+      }
     }
+
+    if (shouldRenderInChunks) {
+      await stitchVideoChunks({
+        tempDir: options.tempDir,
+        chunkPaths,
+        outputPath: options.videoOnlyPath,
+        fps: composition.fps,
+        videoBitrateKbps: options.project.exportConfig.videoBitrateKbps,
+        runFfmpeg: options.runFfmpeg,
+        logInfo: console.info,
+        logWarn: console.warn,
+      });
+    }
+  } finally {
+    await closeCurrentServer();
   }
 }
 
