@@ -8,16 +8,19 @@ import {
   buildFfmpegConcatList,
   buildFinalFfmpegArgs,
   buildFinalFfmpegCopyArgs,
+  cleanupTempDir,
   detectH264HardwareEncoder,
   exportProject,
   normalizeRemotionServeUrl,
   prepareProjectForRemotionRender,
   renderProjectVideoOnly,
+  removePathWithRetries,
   runFinalFfmpegExport,
   startRemotionBundleServer,
   getOutputPath,
   getRemotionChromiumOptionsFromEnv,
   getRemotionEntryPoint,
+  getRemotionBundleServerPort,
   getVisibleFfmpegOptions,
   prepareForcedNvencBinariesDirectory,
   resolveH264EncoderPreference,
@@ -103,7 +106,45 @@ it("starts a stable Remotion bundle server over IPv4 loopback and closes it", as
   expect(closedWith).toBe(true);
 });
 
-it("uses desktop ANGLE GPU rendering by default and rejects invalid GL backends", () => {
+it("chooses a deterministic high Remotion bundle server port instead of the default localhost:3000", () => {
+  const port = getRemotionBundleServerPort("C:/workspace/.tmp/export-123");
+
+  expect(port).toBe(
+    getRemotionBundleServerPort("C:/workspace/.tmp/export-123"),
+  );
+  expect(port).toBeGreaterThanOrEqual(36000);
+  expect(port).toBeLessThan(38000);
+  expect(port).not.toBe(3000);
+});
+
+it("retries the next high Remotion bundle server port if the preferred port is unavailable", async () => {
+  const attemptedPorts: Array<number | null> = [];
+
+  const server = await startRemotionBundleServer({
+    bundleDir: "C:/tmp/remotion-bundle",
+    sampleRate: 48000,
+    port: 37654,
+    portRetries: 3,
+    prepareServer: async (options) => {
+      attemptedPorts.push(options.port);
+      if (attemptedPorts.length === 1) {
+        throw new Error(
+          "You specified port 37654 to be used for the HTTP server, but it is not available.",
+        );
+      }
+
+      return {
+        serveUrl: `http://localhost:${options.port}`,
+        closeServer: async () => undefined,
+      };
+    },
+  });
+
+  expect(attemptedPorts).toEqual([37654, 37655]);
+  expect(server.serveUrl).toBe("http://127.0.0.1:37655/");
+});
+
+it("uses desktop ANGLE GL rendering by default while allowing explicit opt-out", () => {
   expect(getRemotionChromiumOptionsFromEnv({})).toEqual({ gl: "angle" });
   expect(
     getRemotionChromiumOptionsFromEnv({ PLAYLIST2VIDEO_REMOTION_GPU: "1" }),
@@ -153,13 +194,16 @@ it("preserves dense spectrum frames so exported visuals match preview behavior",
   expect(prepared.tracks[0].spectrumFrames?.at(-1)?.[0]).toBeGreaterThan(0.95);
 });
 
-it("renders Remotion through one stable IPv4 bundle server", async () => {
+it("renders Remotion through one stable bundle server while preserving render parallelism", async () => {
   const project = createTestProject();
   const selectedServeUrls: string[] = [];
   const renderedServeUrls: string[] = [];
   const renderOptions: unknown[] = [];
-  const closed: boolean[] = [];
+  let selectedComposition = false;
   const bundleDirs: string[] = [];
+  const startedBundleDirs: string[] = [];
+  const startedBundlePorts: Array<number | null> = [];
+  const closed: boolean[] = [];
 
   await renderProjectVideoOnly({
     project,
@@ -170,13 +214,18 @@ it("renders Remotion through one stable IPv4 bundle server", async () => {
       bundleDirs.push(String(options.outDir));
       return String(options.outDir);
     },
-    startBundleServer: async () => ({
-      serveUrl: "http://127.0.0.1:3000/",
-      close: async (force) => {
-        closed.push(force);
-      },
-    }),
+    startBundleServer: async (options) => {
+      startedBundleDirs.push(options.bundleDir);
+      startedBundlePorts.push(options.port ?? null);
+      return {
+        serveUrl: "http://127.0.0.1:3000/",
+        close: async (force) => {
+          closed.push(force);
+        },
+      };
+    },
     selectCompositionFn: async (options) => {
+      selectedComposition = true;
       selectedServeUrls.push(options.serveUrl);
       return {
         id: "PlaylistVideo",
@@ -213,17 +262,478 @@ it("renders Remotion through one stable IPv4 bundle server", async () => {
   expect(bundleDirs).toEqual([
     path.join("C:/workspace/.tmp/export-123", "remotion-bundle"),
   ]);
+  expect(startedBundleDirs).toEqual([
+    path.join("C:/workspace/.tmp/export-123", "remotion-bundle"),
+  ]);
+  expect(startedBundlePorts).toEqual([
+    getRemotionBundleServerPort(
+      path.join("C:/workspace/.tmp/export-123", "remotion-bundle"),
+    ),
+  ]);
   expect(selectedServeUrls).toEqual(["http://127.0.0.1:3000/"]);
   expect(renderedServeUrls).toEqual(["http://127.0.0.1:3000/"]);
   expect(renderOptions[0]).toMatchObject({
+    concurrency: 16,
     disallowParallelEncoding: false,
     imageFormat: "jpeg",
     jpegQuality: 100,
     muted: true,
     videoBitrate: "12000k",
   });
-  expect(renderOptions[0]).toHaveProperty("concurrency");
+  expect(selectedComposition).toBe(true);
   expect(closed).toEqual([false]);
+});
+
+it("keeps Remotion render concurrency enabled for long playlists", async () => {
+  const project = createTestProject();
+  let renderOptions: unknown = null;
+
+  await renderProjectVideoOnly({
+    project,
+    workspaceDir: "C:/workspace",
+    tempDir: "C:/workspace/.tmp/export-123",
+    videoOnlyPath: "C:/workspace/.tmp/export-123/video.mp4",
+    bundleRemotion: async (options) => String(options.outDir),
+    startBundleServer: async () => ({
+      serveUrl: "http://127.0.0.1:3000/",
+      close: async () => undefined,
+    }),
+    selectCompositionFn: async () => ({
+      id: "PlaylistVideo",
+      width: project.exportConfig.width,
+      height: project.exportConfig.height,
+      fps: project.exportConfig.fps,
+      durationInFrames: 30,
+      props: {},
+      defaultProps: {},
+      defaultCodec: null,
+      defaultOutName: null,
+      defaultVideoImageFormat: null,
+      defaultPixelFormat: null,
+      defaultProResProfile: null,
+      defaultSampleRate: null,
+    }),
+    renderMediaFn: async (options) => {
+      renderOptions = options;
+      return { buffer: null, slowestFrames: [], contentType: "video/mp4" };
+    },
+  });
+
+  expect(renderOptions).toMatchObject({
+    concurrency: 16,
+    disallowParallelEncoding: false,
+  });
+});
+
+it("reuses the stable bundle server URL for selectComposition and renderMedia", async () => {
+  const project = createTestProject();
+  let selectedServeUrl = "";
+  let renderedServeUrl = "";
+
+  await renderProjectVideoOnly({
+    project,
+    workspaceDir: "C:/workspace",
+    tempDir: "C:/workspace/.tmp/export-123",
+    videoOnlyPath: "C:/workspace/.tmp/export-123/video.mp4",
+    bundleRemotion: async (options) => String(options.outDir),
+    startBundleServer: async () => ({
+      serveUrl: "http://127.0.0.1:3000/",
+      close: async () => undefined,
+    }),
+    selectCompositionFn: async (options) => {
+      selectedServeUrl = options.serveUrl;
+      return {
+        id: "PlaylistVideo",
+        width: project.exportConfig.width,
+        height: project.exportConfig.height,
+        fps: project.exportConfig.fps,
+        durationInFrames: 30,
+        props: {},
+        defaultProps: {},
+        defaultCodec: null,
+        defaultOutName: null,
+        defaultVideoImageFormat: null,
+        defaultPixelFormat: null,
+        defaultProResProfile: null,
+        defaultSampleRate: null,
+      };
+    },
+    renderMediaFn: async (options) => {
+      renderedServeUrl = options.serveUrl;
+      return { buffer: null, slowestFrames: [], contentType: "video/mp4" };
+    },
+  });
+
+  expect(selectedServeUrl).toBe("http://127.0.0.1:3000/");
+  expect(renderedServeUrl).toBe("http://127.0.0.1:3000/");
+});
+
+it("passes the prepared Remotion server into rendering without disabling parallelism", async () => {
+  const project = createTestProject();
+  const remotionServer = {
+    serveUrl: "http://127.0.0.1:37654/",
+    closeServer: async () => undefined,
+    offthreadPort: 37654,
+    compositor: {},
+    sourceMap: () => null,
+    downloadMap: {},
+  } as never;
+  let renderedWithServer: unknown = null;
+  let renderedConcurrency: unknown = null;
+  let renderedDisallowParallelEncoding: unknown = null;
+
+  await renderProjectVideoOnly({
+    project,
+    workspaceDir: "C:/workspace",
+    tempDir: "C:/workspace/.tmp/export-123",
+    videoOnlyPath: "C:/workspace/.tmp/export-123/video.mp4",
+    bundleRemotion: async (options) => String(options.outDir),
+    startBundleServer: async () => ({
+      serveUrl: "http://127.0.0.1:37654/",
+      remotionServer,
+      close: async () => undefined,
+    }),
+    selectCompositionFn: async () => ({
+      id: "PlaylistVideo",
+      width: project.exportConfig.width,
+      height: project.exportConfig.height,
+      fps: project.exportConfig.fps,
+      durationInFrames: 30,
+      props: {},
+      defaultProps: {},
+      defaultCodec: null,
+      defaultOutName: null,
+      defaultVideoImageFormat: null,
+      defaultPixelFormat: null,
+      defaultProResProfile: null,
+      defaultSampleRate: null,
+    }),
+    renderWithPreparedServer: async ({ server, renderOptions }) => {
+      renderedWithServer = server;
+      renderedConcurrency = renderOptions.concurrency;
+      renderedDisallowParallelEncoding = renderOptions.disallowParallelEncoding;
+      return { buffer: null, slowestFrames: [], contentType: "video/mp4" };
+    },
+  });
+
+  expect(renderedWithServer).toBe(remotionServer);
+  expect(renderedConcurrency).toBe(16);
+  expect(renderedDisallowParallelEncoding).toBe(false);
+});
+
+it("retries the Remotion render once when Chromium receives no response from the serve URL", async () => {
+  const project = createTestProject();
+  const selectedServeUrls: string[] = [];
+  const renderedServeUrls: string[] = [];
+
+  await renderProjectVideoOnly({
+    project,
+    workspaceDir: "C:/workspace",
+    tempDir: "C:/workspace/.tmp/export-123",
+    videoOnlyPath: "C:/workspace/.tmp/export-123/video.mp4",
+    bundleRemotion: async (options) => String(options.outDir),
+    selectCompositionFn: async (options) => {
+      selectedServeUrls.push(options.serveUrl);
+      if (selectedServeUrls.length === 1) {
+        throw new Error(
+          `Visited "${options.serveUrl}index.html" but got no response.`,
+        );
+      }
+      return {
+        id: "PlaylistVideo",
+        width: project.exportConfig.width,
+        height: project.exportConfig.height,
+        fps: project.exportConfig.fps,
+        durationInFrames: 30,
+        props: {},
+        defaultProps: {},
+        defaultCodec: null,
+        defaultOutName: null,
+        defaultVideoImageFormat: null,
+        defaultPixelFormat: null,
+        defaultProResProfile: null,
+        defaultSampleRate: null,
+      };
+    },
+    renderMediaFn: async (options) => {
+      renderedServeUrls.push(options.serveUrl);
+      return {
+        buffer: null,
+        slowestFrames: [],
+        contentType: "video/mp4",
+      };
+    },
+  });
+
+  expect(selectedServeUrls).toEqual([
+    path.join("C:/workspace/.tmp/export-123", "remotion-bundle"),
+    path.join("C:/workspace/.tmp/export-123", "remotion-bundle"),
+  ]);
+  expect(renderedServeUrls).toEqual([
+    path.join("C:/workspace/.tmp/export-123", "remotion-bundle"),
+  ]);
+});
+
+it("retries transient Remotion browser bundle load errors before failing export", async () => {
+  const retryableErrors = [
+    "Browser failed to load http://localhost:3000/bundle.js (Script): net::ERR_CONNECTION_RESET",
+    "Browser failed to load http://localhost:3000/bundle.js (Script): net::ERR_CONTENT_LENGTH_MISMATCH",
+    "http://127.0.0.1:3001/bundle.js Failed to load resource: net::ERR_SOCKET",
+  ];
+
+  for (const retryableError of retryableErrors) {
+    const project = createTestProject();
+    let selectAttempts = 0;
+    let renderAttempts = 0;
+
+    await renderProjectVideoOnly({
+      project,
+      workspaceDir: "C:/workspace",
+      tempDir: "C:/workspace/.tmp/export-123",
+      videoOnlyPath: "C:/workspace/.tmp/export-123/video.mp4",
+      bundleRemotion: async (options) => String(options.outDir),
+      selectCompositionFn: async () => {
+        selectAttempts += 1;
+        return {
+          id: "PlaylistVideo",
+          width: project.exportConfig.width,
+          height: project.exportConfig.height,
+          fps: project.exportConfig.fps,
+          durationInFrames: 30,
+          props: {},
+          defaultProps: {},
+          defaultCodec: null,
+          defaultOutName: null,
+          defaultVideoImageFormat: null,
+          defaultPixelFormat: null,
+          defaultProResProfile: null,
+          defaultSampleRate: null,
+        };
+      },
+      renderMediaFn: async () => {
+        renderAttempts += 1;
+        if (renderAttempts === 1) {
+          throw new Error(retryableError);
+        }
+        return { buffer: null, slowestFrames: [], contentType: "video/mp4" };
+      },
+    });
+
+    expect(selectAttempts).toBe(2);
+    expect(renderAttempts).toBe(2);
+  }
+});
+
+it("keeps recovered transient Remotion navigation retries out of user-visible error logs", async () => {
+  const project = createTestProject();
+  let renderAttempts = 0;
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+  try {
+    await renderProjectVideoOnly({
+      project,
+      workspaceDir: "C:/workspace",
+      tempDir: "C:/workspace/.tmp/export-123",
+      videoOnlyPath: "C:/workspace/.tmp/export-123/video.mp4",
+      bundleRemotion: async (options) => String(options.outDir),
+      selectCompositionFn: async () => ({
+        id: "PlaylistVideo",
+        width: project.exportConfig.width,
+        height: project.exportConfig.height,
+        fps: project.exportConfig.fps,
+        durationInFrames: 30,
+        props: {},
+        defaultProps: {},
+        defaultCodec: null,
+        defaultOutName: null,
+        defaultVideoImageFormat: null,
+        defaultPixelFormat: null,
+        defaultProResProfile: null,
+        defaultSampleRate: null,
+      }),
+      renderMediaFn: async () => {
+        renderAttempts += 1;
+        if (renderAttempts === 1) {
+          throw new Error(
+            'Visited "http://127.0.0.1:36442/index.html" but got no response.',
+          );
+        }
+        return { buffer: null, slowestFrames: [], contentType: "video/mp4" };
+      },
+    });
+  } finally {
+    warnSpy.mockRestore();
+  }
+
+  expect(renderAttempts).toBe(2);
+  expect(warnSpy).not.toHaveBeenCalled();
+});
+
+it("keeps retrying sequential transient Remotion browser load errors", async () => {
+  const project = createTestProject();
+  let selectAttempts = 0;
+  let renderAttempts = 0;
+  const transientFailures = [
+    'Visited "http://localhost:3000/index.html" but got no response.',
+    "Browser failed to load http://localhost:3000/bundle.js (Script): net::ERR_CONTENT_LENGTH_MISMATCH",
+  ];
+
+  await renderProjectVideoOnly({
+    project,
+    workspaceDir: "C:/workspace",
+    tempDir: "C:/workspace/.tmp/export-123",
+    videoOnlyPath: "C:/workspace/.tmp/export-123/video.mp4",
+    bundleRemotion: async (options) => String(options.outDir),
+    selectCompositionFn: async () => {
+      selectAttempts += 1;
+      return {
+        id: "PlaylistVideo",
+        width: project.exportConfig.width,
+        height: project.exportConfig.height,
+        fps: project.exportConfig.fps,
+        durationInFrames: 30,
+        props: {},
+        defaultProps: {},
+        defaultCodec: null,
+        defaultOutName: null,
+        defaultVideoImageFormat: null,
+        defaultPixelFormat: null,
+        defaultProResProfile: null,
+        defaultSampleRate: null,
+      };
+    },
+    renderMediaFn: async () => {
+      renderAttempts += 1;
+      const failure = transientFailures[renderAttempts - 1];
+      if (failure) {
+        throw new Error(failure);
+      }
+      return { buffer: null, slowestFrames: [], contentType: "video/mp4" };
+    },
+  });
+
+  expect(selectAttempts).toBe(3);
+  expect(renderAttempts).toBe(3);
+});
+
+it("restarts the prepared Remotion bundle server after a transient render failure", async () => {
+  const project = createTestProject();
+  const startedServeUrls: string[] = [];
+  const selectedServeUrls: string[] = [];
+  const renderedServeUrls: string[] = [];
+  const closedServeUrls: string[] = [];
+  let renderAttempts = 0;
+
+  await renderProjectVideoOnly({
+    project,
+    workspaceDir: "C:/workspace",
+    tempDir: "C:/workspace/.tmp/export-123",
+    videoOnlyPath: "C:/workspace/.tmp/export-123/video.mp4",
+    bundleRemotion: async (options) => String(options.outDir),
+    startBundleServer: async () => {
+      const serveUrl = `http://127.0.0.1:${36500 + startedServeUrls.length}/`;
+      startedServeUrls.push(serveUrl);
+      return {
+        serveUrl,
+        close: async () => {
+          closedServeUrls.push(serveUrl);
+        },
+      };
+    },
+    selectCompositionFn: async (options) => {
+      selectedServeUrls.push(options.serveUrl);
+      return {
+        id: "PlaylistVideo",
+        width: project.exportConfig.width,
+        height: project.exportConfig.height,
+        fps: project.exportConfig.fps,
+        durationInFrames: 30,
+        props: {},
+        defaultProps: {},
+        defaultCodec: null,
+        defaultOutName: null,
+        defaultVideoImageFormat: null,
+        defaultPixelFormat: null,
+        defaultProResProfile: null,
+        defaultSampleRate: null,
+      };
+    },
+    renderMediaFn: async (options) => {
+      renderAttempts += 1;
+      renderedServeUrls.push(options.serveUrl);
+      if (renderAttempts === 1) {
+        throw new Error(
+          `Visited "${options.serveUrl}index.html" but got no response.`,
+        );
+      }
+      return { buffer: null, slowestFrames: [], contentType: "video/mp4" };
+    },
+  });
+
+  expect(startedServeUrls).toEqual([
+    "http://127.0.0.1:36500/",
+    "http://127.0.0.1:36501/",
+  ]);
+  expect(selectedServeUrls).toEqual(startedServeUrls);
+  expect(renderedServeUrls).toEqual(startedServeUrls);
+  expect(closedServeUrls).toEqual(startedServeUrls);
+});
+
+it("waits for Remotion's asynchronous server cleanup before render, retry, and return", async () => {
+  const project = createTestProject();
+  const events: string[] = [];
+  let renderAttempts = 0;
+
+  await renderProjectVideoOnly({
+    project,
+    workspaceDir: "C:/workspace",
+    tempDir: "C:/workspace/.tmp/export-123",
+    videoOnlyPath: "C:/workspace/.tmp/export-123/video.mp4",
+    remotionCleanupSettleMs: 25,
+    wait: async (milliseconds) => {
+      events.push(`wait:${milliseconds}`);
+    },
+    bundleRemotion: async (options) => String(options.outDir),
+    selectCompositionFn: async () => {
+      events.push("select");
+      return {
+        id: "PlaylistVideo",
+        width: project.exportConfig.width,
+        height: project.exportConfig.height,
+        fps: project.exportConfig.fps,
+        durationInFrames: 30,
+        props: {},
+        defaultProps: {},
+        defaultCodec: null,
+        defaultOutName: null,
+        defaultVideoImageFormat: null,
+        defaultPixelFormat: null,
+        defaultProResProfile: null,
+        defaultSampleRate: null,
+      };
+    },
+    renderMediaFn: async () => {
+      renderAttempts += 1;
+      events.push(`render:${renderAttempts}`);
+      if (renderAttempts === 1) {
+        throw new Error(
+          'Visited "http://localhost:3000/index.html" but got no response.',
+        );
+      }
+      return { buffer: null, slowestFrames: [], contentType: "video/mp4" };
+    },
+  });
+
+  expect(events).toEqual([
+    "select",
+    "wait:25",
+    "render:1",
+    "wait:25",
+    "select",
+    "wait:25",
+    "render:2",
+    "wait:25",
+  ]);
 });
 
 it("defaults Remotion FFmpeg stitching to NVENC when it is supported", async () => {
@@ -238,10 +748,6 @@ it("defaults Remotion FFmpeg stitching to NVENC when it is supported", async () 
       tempDir: "C:/workspace/.tmp/export-123",
       videoOnlyPath: "C:/workspace/.tmp/export-123/video.mp4",
       bundleRemotion: async (options) => String(options.outDir),
-      startBundleServer: async () => ({
-        serveUrl: "http://127.0.0.1:3000/",
-        close: async () => undefined,
-      }),
       selectCompositionFn: async () => ({
         id: "PlaylistVideo",
         width: project.exportConfig.width,
@@ -308,10 +814,6 @@ it("does not force Remotion NVENC when the hardware probe cannot use it", async 
     tempDir: "C:/workspace/.tmp/export-123",
     videoOnlyPath: "C:/workspace/.tmp/export-123/video.mp4",
     bundleRemotion: async (options) => String(options.outDir),
-    startBundleServer: async () => ({
-      serveUrl: "http://127.0.0.1:3000/",
-      close: async () => undefined,
-    }),
     selectCompositionFn: async () => ({
       id: "PlaylistVideo",
       width: project.exportConfig.width,
@@ -362,10 +864,6 @@ it("uses an environment-specified Remotion encoder instead of default NVENC", as
       tempDir: "C:/workspace/.tmp/export-123",
       videoOnlyPath: "C:/workspace/.tmp/export-123/video.mp4",
       bundleRemotion: async (options) => String(options.outDir),
-      startBundleServer: async () => ({
-        serveUrl: "http://127.0.0.1:3000/",
-        close: async () => undefined,
-      }),
       selectCompositionFn: async () => ({
         id: "PlaylistVideo",
         width: project.exportConfig.width,
@@ -478,10 +976,6 @@ it("can enable Remotion Chromium GPU rendering with the desktop ANGLE backend", 
       tempDir: "C:/workspace/.tmp/export-123",
       videoOnlyPath: "C:/workspace/.tmp/export-123/video.mp4",
       bundleRemotion: async (options) => String(options.outDir),
-      startBundleServer: async () => ({
-        serveUrl: "http://127.0.0.1:3000/",
-        close: async () => undefined,
-      }),
       selectCompositionFn: async () => ({
         id: "PlaylistVideo",
         width: project.exportConfig.width,
@@ -542,10 +1036,6 @@ it("passes Remotion render progress through without export-stage remapping", asy
       videoOnlyPath: "C:/workspace/.tmp/export-123/video.mp4",
       onProgress: (progress) => progressUpdates.push(progress),
       bundleRemotion: async (options) => String(options.outDir),
-      startBundleServer: async () => ({
-        serveUrl: "http://127.0.0.1:3000/",
-        close: async () => undefined,
-      }),
       selectCompositionFn: async () => ({
         id: "PlaylistVideo",
         width: project.exportConfig.width,
@@ -626,10 +1116,6 @@ it("passes PNG intermediate frame settings to Remotion without JPEG quality", as
     tempDir: "C:/workspace/.tmp/export-123",
     videoOnlyPath: "C:/workspace/.tmp/export-123/video.mp4",
     bundleRemotion: async (options) => String(options.outDir),
-    startBundleServer: async () => ({
-      serveUrl: "http://127.0.0.1:3000/",
-      close: async () => undefined,
-    }),
     selectCompositionFn: async () => ({
       id: "PlaylistVideo",
       width: project.exportConfig.width,
@@ -806,6 +1292,77 @@ it("can preserve temporary export files for diagnostics", async () => {
   await fs.rm(workspaceDir, { recursive: true, force: true });
 });
 
+it("retries transient Windows cleanup locks before giving up", async () => {
+  const calls: string[] = [];
+  const waits: number[] = [];
+  let attempts = 0;
+
+  await removePathWithRetries("C:/workspace/.tmp/export-locked", {
+    maxAttempts: 3,
+    initialDelayMs: 10,
+    wait: async (milliseconds) => {
+      waits.push(milliseconds);
+    },
+    remove: async (targetPath) => {
+      calls.push(targetPath);
+      attempts += 1;
+      if (attempts < 3) {
+        const error = new Error("busy") as NodeJS.ErrnoException;
+        error.code = "EBUSY";
+        throw error;
+      }
+    },
+  });
+
+  expect(calls).toEqual([
+    "C:/workspace/.tmp/export-locked",
+    "C:/workspace/.tmp/export-locked",
+    "C:/workspace/.tmp/export-locked",
+  ]);
+  expect(waits).toEqual([10, 20]);
+});
+
+it("keeps a completed export successful when temp cleanup is still locked by Remotion", async () => {
+  const warnings: string[] = [];
+  const cleanupError = new Error("busy") as NodeJS.ErrnoException;
+  cleanupError.code = "EBUSY";
+
+  await expect(
+    cleanupTempDir("C:/workspace/.tmp/export-locked", {
+      removeTempDir: async () => {
+        throw cleanupError;
+      },
+      logWarn: (message) => warnings.push(message),
+      exportCompleted: true,
+    }),
+  ).resolves.toBeUndefined();
+
+  expect(warnings).toEqual([
+    expect.stringContaining("Could not clean temporary export directory"),
+  ]);
+});
+
+it("does not let cleanup failure hide the original export error", async () => {
+  const warnings: string[] = [];
+  const cleanupError = new Error("busy") as NodeJS.ErrnoException;
+  cleanupError.code = "EBUSY";
+  const exportError = new Error("render failed");
+
+  await expect(
+    cleanupTempDir("C:/workspace/.tmp/export-locked", {
+      removeTempDir: async () => {
+        throw cleanupError;
+      },
+      logWarn: (message) => warnings.push(message),
+      exportError,
+    }),
+  ).resolves.toBeUndefined();
+
+  expect(warnings).toEqual([
+    expect.stringContaining("Original export error: render failed"),
+  ]);
+});
+
 it("maps only audio during FFmpeg concat so embedded MP3 cover art is not encoded as video", () => {
   const exportConfig: ExportConfig = {
     width: 1920,
@@ -826,7 +1383,7 @@ it("maps only audio during FFmpeg concat so embedded MP3 cover art is not encode
   };
 
   const args = buildAudioFfmpegArgs(
-    "audio-list.txt",
+    ["audio-with-cover.mp3"],
     "audio.m4a",
     exportConfig,
   );
@@ -834,11 +1391,11 @@ it("maps only audio during FFmpeg concat so embedded MP3 cover art is not encode
   expect(args).toContain("-vn");
   expect(args.slice(args.indexOf("-map"), args.indexOf("-map") + 2)).toEqual([
     "-map",
-    "0:a:0",
+    "[aout]",
   ]);
 });
 
-it("builds FFmpeg audio concat arguments from export settings", () => {
+it("builds FFmpeg audio concat filter arguments from export settings", () => {
   const exportConfig: ExportConfig = {
     width: 1920,
     height: 1080,
@@ -858,18 +1415,22 @@ it("builds FFmpeg audio concat arguments from export settings", () => {
   };
 
   expect(
-    buildAudioFfmpegArgs("audio-list.txt", "audio.m4a", exportConfig),
+    buildAudioFfmpegArgs(
+      ["track-1.mp3", "track-2.flac"],
+      "audio.m4a",
+      exportConfig,
+    ),
   ).toEqual([
     "-y",
     "-stats",
-    "-f",
-    "concat",
-    "-safe",
-    "0",
     "-i",
-    "audio-list.txt",
+    "track-1.mp3",
+    "-i",
+    "track-2.flac",
+    "-filter_complex",
+    "[0:a:0][1:a:0]concat=n=2:v=0:a=1,volume=0.85[aout]",
     "-map",
-    "0:a:0",
+    "[aout]",
     "-vn",
     "-c:a",
     "aac",
@@ -879,10 +1440,27 @@ it("builds FFmpeg audio concat arguments from export settings", () => {
     "44100",
     "-ac",
     "1",
-    "-filter:a",
-    "volume=0.85",
     "audio.m4a",
   ]);
+});
+
+it("uses decoded audio inputs for playlist concat so mixed MP3 and FLAC files are not read as one MP3 stream", () => {
+  const exportConfig = createTestProject().exportConfig;
+  const args = buildAudioFfmpegArgs(
+    ["first.mp3", "second.flac"],
+    "audio.m4a",
+    exportConfig,
+  );
+
+  expect(args).not.toContain("-f");
+  expect(args).not.toContain("-safe");
+  expect(args).toContain("-filter_complex");
+  expect(args).toEqual(
+    expect.arrayContaining(["-i", "first.mp3", "-i", "second.flac"]),
+  );
+  expect(args[args.indexOf("-filter_complex") + 1]).toContain(
+    "concat=n=2:v=0:a=1",
+  );
 });
 
 it("selects the highest-priority available H.264 hardware encoder from FFmpeg encoder output", () => {

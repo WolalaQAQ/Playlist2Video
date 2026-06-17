@@ -9,6 +9,7 @@ import {
   renderMedia,
   selectComposition,
 } from "@remotion/renderer";
+import { NoReactInternals } from "remotion/no-react";
 import type {
   FfmpegOverrideFn,
   LogLevel,
@@ -56,12 +57,22 @@ type FinalFfmpegExportForExport = (
 type PrepareRemotionServerOptions = Parameters<
   typeof RenderInternals.prepareServer
 >[0];
+type PreparedRemotionBundleServer = {
+  serveUrl: string;
+  close: (force: boolean) => Promise<void>;
+  remotionServer?: RemotionServer;
+};
+
+function noopOnBrowserDownload() {
+  return { version: null, onProgress: () => undefined };
+}
 
 export interface StartRemotionBundleServerOptions {
   bundleDir: string;
   remotionRoot?: string;
   sampleRate?: number;
   port?: number | null;
+  portRetries?: number;
   logLevel?: LogLevel;
   prepareServer?: (
     options: PrepareRemotionServerOptions,
@@ -77,13 +88,21 @@ export interface RenderProjectVideoOnlyOptions {
   bundleRemotion?: (options: BundleOptions) => Promise<string>;
   startBundleServer?: (
     options: StartRemotionBundleServerOptions,
-  ) => Promise<{ serveUrl: string; close: (force: boolean) => Promise<void> }>;
+  ) => Promise<PreparedRemotionBundleServer>;
+  remotionRenderMaxAttempts?: number;
+  remotionCleanupSettleMs?: number;
+  wait?: (milliseconds: number) => Promise<void>;
   selectCompositionFn?: (
     options: SelectCompositionOptions,
   ) => ReturnType<typeof selectComposition>;
   renderMediaFn?: (
     options: RenderMediaOptions,
   ) => ReturnType<typeof renderMedia>;
+  renderWithPreparedServer?: (options: {
+    server: RemotionServer | undefined;
+    renderOptions: RenderMediaOptions;
+    inputProps: { project: Project };
+  }) => ReturnType<typeof renderMedia>;
   detectHardwareEncoder?: () => Promise<H264HardwareEncoder | null>;
   prepareForcedNvencBinariesDirectory?: (options: {
     targetDir: string;
@@ -148,6 +167,93 @@ export async function timeAsyncStep<T>(
   }
 }
 
+function sleep(milliseconds: number): Promise<void> {
+  if (milliseconds <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function isRetriableCleanupError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "EBUSY" || code === "ENOTEMPTY" || code === "EPERM";
+}
+
+function formatUnknownError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+export async function removePathWithRetries(
+  targetPath: string,
+  options: {
+    maxAttempts?: number;
+    initialDelayMs?: number;
+    remove?: (targetPath: string) => Promise<void>;
+    wait?: (milliseconds: number) => Promise<void>;
+  } = {},
+): Promise<void> {
+  const maxAttempts = Math.max(1, options.maxAttempts ?? 8);
+  const initialDelayMs = options.initialDelayMs ?? 250;
+  const remove =
+    options.remove ??
+    ((pathToRemove: string) =>
+      fs.rm(pathToRemove, { recursive: true, force: true }));
+  const wait = options.wait ?? sleep;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await remove(targetPath);
+      return;
+    } catch (error) {
+      const shouldRetry =
+        attempt < maxAttempts && isRetriableCleanupError(error);
+      if (!shouldRetry) throw error;
+      await wait(initialDelayMs * 2 ** (attempt - 1));
+    }
+  }
+}
+
+export async function cleanupTempDir(
+  tempDir: string,
+  options: {
+    removeTempDir?: (tempDir: string) => Promise<void>;
+    logWarn?: (message: string) => void;
+    exportError?: unknown;
+    exportCompleted?: boolean;
+  } = {},
+): Promise<void> {
+  const removeTempDir =
+    options.removeTempDir ??
+    ((pathToRemove: string) => removePathWithRetries(pathToRemove));
+  const logWarn = options.logWarn ?? console.warn;
+
+  try {
+    await removeTempDir(tempDir);
+  } catch (cleanupError) {
+    const message =
+      `Could not clean temporary export directory "${tempDir}": ` +
+      formatUnknownError(cleanupError);
+
+    if (options.exportError) {
+      logWarn(
+        `${message}. Original export error: ${formatUnknownError(
+          options.exportError,
+        )}`,
+      );
+      return;
+    }
+
+    if (options.exportCompleted) {
+      logWarn(
+        `${message}. Export output was already completed; leaving temp files for manual cleanup.`,
+      );
+      return;
+    }
+
+    throw cleanupError;
+  }
+}
+
 export function escapeFfmpegConcatPath(filePath: string): string {
   return filePath.replaceAll("'", "'\\''");
 }
@@ -183,39 +289,302 @@ export function normalizeRemotionServeUrl(serveUrl: string): string {
   return url.toString();
 }
 
-export async function startRemotionBundleServer(
-  options: StartRemotionBundleServerOptions,
-): Promise<{ serveUrl: string; close: (force: boolean) => Promise<void> }> {
-  const prepareServer = options.prepareServer ?? RenderInternals.prepareServer;
-  const server = await prepareServer({
-    webpackConfigOrServeUrl: options.bundleDir,
-    port: options.port ?? null,
-    remotionRoot: options.remotionRoot ?? path.dirname(getRemotionEntryPoint()),
-    offthreadVideoThreads: 0,
-    logLevel: options.logLevel ?? "info",
+const remotionBundleServerPortStart = 36000;
+const remotionBundleServerPortRange = 2000;
+
+export function getRemotionBundleServerPort(seed: string): number {
+  let hash = 0;
+  for (const char of seed) {
+    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  }
+
+  return remotionBundleServerPortStart + (hash % remotionBundleServerPortRange);
+}
+
+function nextRemotionBundleServerPort(port: number): number {
+  const offset =
+    (port - remotionBundleServerPortStart + 1) % remotionBundleServerPortRange;
+  return remotionBundleServerPortStart + offset;
+}
+
+function isRemotionPortUnavailableError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as NodeJS.ErrnoException).code;
+  return (
+    code === "EADDRINUSE" ||
+    error.message.includes("is not available") ||
+    error.message.includes("EADDRINUSE")
+  );
+}
+
+function isCompleteRemotionServer(
+  server: Pick<RemotionServer, "serveUrl" | "closeServer">,
+): server is RemotionServer {
+  return (
+    "offthreadPort" in server &&
+    "compositor" in server &&
+    "sourceMap" in server &&
+    "downloadMap" in server
+  );
+}
+
+function serializeRemotionInputProps(data: Record<string, unknown>): string {
+  return NoReactInternals.serializeJSONWithSpecialTypes({
+    indent: undefined,
+    staticBase: null,
+    data,
+  }).serializedString;
+}
+
+async function selectCompositionWithPreparedServer(options: {
+  server: RemotionServer | undefined;
+  serveUrl: string;
+  id: string;
+  inputProps: Record<string, unknown>;
+  chromiumOptions: RemotionChromiumOptions | undefined;
+}): ReturnType<typeof selectComposition> {
+  if (!options.server) {
+    return selectComposition({
+      serveUrl: options.serveUrl,
+      id: options.id,
+      inputProps: options.inputProps,
+      ...(options.chromiumOptions
+        ? { chromiumOptions: options.chromiumOptions }
+        : {}),
+    });
+  }
+
+  const { metadata } = await RenderInternals.internalSelectComposition({
+    id: options.id,
+    serveUrl: options.serveUrl,
+    server: options.server,
+    serializedInputPropsWithCustomSchema: serializeRemotionInputProps(
+      options.inputProps,
+    ),
+    browserExecutable: null,
+    chromiumOptions: options.chromiumOptions ?? {},
+    envVariables: {},
     indent: false,
+    logLevel: "info",
+    onBrowserLog: null,
+    onBrowserDownload: noopOnBrowserDownload,
+    onServeUrlVisited: () => undefined,
+    port: null,
+    puppeteerInstance: undefined,
+    timeoutInMilliseconds: 30000,
     offthreadVideoCacheSizeInBytes: null,
     binariesDirectory: null,
-    forceIPv4: true,
-    sampleRate: options.sampleRate ?? 48000,
+    chromeMode: "headless-shell",
+    offthreadVideoThreads: null,
+    mediaCacheSizeInBytes: null,
   });
 
-  return {
-    serveUrl: normalizeRemotionServeUrl(server.serveUrl),
-    close: async (force: boolean) => {
-      await server.closeServer(force);
-    },
-  };
+  return metadata;
+}
+
+async function renderMediaWithPreparedServer(options: {
+  server: RemotionServer | undefined;
+  renderOptions: RenderMediaOptions;
+  inputProps: { project: Project };
+}): ReturnType<typeof renderMedia> {
+  const { server, renderOptions } = options;
+  if (!server) return renderMedia(renderOptions);
+
+  const composition = renderOptions.composition;
+  const logLevel: LogLevel =
+    renderOptions.verbose || renderOptions.dumpBrowserLogs
+      ? "verbose"
+      : (renderOptions.logLevel ?? "info");
+  const licenseKey =
+    "licenseKey" in renderOptions
+      ? (renderOptions.licenseKey ?? null)
+      : "apiKey" in renderOptions
+        ? (renderOptions.apiKey ?? null)
+        : null;
+
+  return RenderInternals.internalRenderMedia({
+    proResProfile: renderOptions.proResProfile ?? undefined,
+    x264Preset: renderOptions.x264Preset ?? null,
+    gopSize: renderOptions.gopSize ?? null,
+    crf: renderOptions.crf ?? null,
+    composition,
+    serializedInputPropsWithCustomSchema: serializeRemotionInputProps(
+      options.inputProps,
+    ),
+    pixelFormat: renderOptions.pixelFormat ?? null,
+    codec: renderOptions.codec,
+    envVariables: renderOptions.envVariables ?? {},
+    frameRange: renderOptions.frameRange ?? null,
+    puppeteerInstance: renderOptions.puppeteerInstance,
+    outputLocation: renderOptions.outputLocation ?? null,
+    onProgress: renderOptions.onProgress ?? (() => undefined),
+    overwrite: renderOptions.overwrite ?? true,
+    onDownload: renderOptions.onDownload ?? (() => undefined),
+    onBrowserLog: renderOptions.onBrowserLog ?? null,
+    onStart: renderOptions.onStart ?? (() => undefined),
+    timeoutInMilliseconds: renderOptions.timeoutInMilliseconds ?? 30000,
+    chromiumOptions: renderOptions.chromiumOptions ?? {},
+    scale: renderOptions.scale ?? 1,
+    browserExecutable: renderOptions.browserExecutable ?? null,
+    port: null,
+    cancelSignal: renderOptions.cancelSignal,
+    muted: renderOptions.muted ?? false,
+    enforceAudioTrack: renderOptions.enforceAudioTrack ?? false,
+    ffmpegOverride: renderOptions.ffmpegOverride,
+    audioBitrate: renderOptions.audioBitrate ?? null,
+    videoBitrate: renderOptions.videoBitrate ?? null,
+    encodingMaxRate: renderOptions.encodingMaxRate ?? null,
+    encodingBufferSize: renderOptions.encodingBufferSize ?? null,
+    audioCodec: renderOptions.audioCodec ?? null,
+    concurrency: renderOptions.concurrency ?? null,
+    disallowParallelEncoding: renderOptions.disallowParallelEncoding ?? false,
+    everyNthFrame: renderOptions.everyNthFrame ?? 1,
+    imageFormat: renderOptions.imageFormat ?? null,
+    jpegQuality: renderOptions.jpegQuality ?? 80,
+    numberOfGifLoops: renderOptions.numberOfGifLoops ?? null,
+    onCtrlCExit: () => undefined,
+    preferLossless: renderOptions.preferLossless ?? false,
+    serveUrl: renderOptions.serveUrl,
+    server,
+    logLevel,
+    indent: false,
+    serializedResolvedPropsWithCustomSchema: serializeRemotionInputProps(
+      (composition.props ?? {}) as Record<string, unknown>,
+    ),
+    offthreadVideoCacheSizeInBytes:
+      renderOptions.offthreadVideoCacheSizeInBytes ?? null,
+    colorSpace: renderOptions.colorSpace ?? "default",
+    repro: renderOptions.repro ?? false,
+    binariesDirectory: renderOptions.binariesDirectory ?? null,
+    separateAudioTo: renderOptions.separateAudioTo ?? null,
+    forSeamlessAacConcatenation:
+      renderOptions.forSeamlessAacConcatenation ?? false,
+    onBrowserDownload: renderOptions.onBrowserDownload ?? noopOnBrowserDownload,
+    onArtifact: renderOptions.onArtifact ?? null,
+    metadata: renderOptions.metadata ?? null,
+    hardwareAcceleration: renderOptions.hardwareAcceleration ?? "disable",
+    chromeMode: renderOptions.chromeMode ?? "headless-shell",
+    offthreadVideoThreads: renderOptions.offthreadVideoThreads ?? null,
+    compositionStart: renderOptions.compositionStart ?? 0,
+    mediaCacheSizeInBytes: renderOptions.mediaCacheSizeInBytes ?? null,
+    onLog: RenderInternals.defaultOnLog,
+    licenseKey,
+    isProduction: renderOptions.isProduction ?? null,
+    sampleRate:
+      renderOptions.sampleRate ?? composition.defaultSampleRate ?? 48000,
+  });
+}
+
+export function isRemotionServeUrlNoResponseError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes("Visited ") &&
+    error.message.includes("but got no response")
+  );
+}
+
+export function isRetriableRemotionBrowserError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message;
+  if (isRemotionServeUrlNoResponseError(error)) return true;
+
+  const browserLoadError =
+    message.includes("Browser failed to load") ||
+    message.includes("Failed to load resource");
+  const loopbackBundleUrl = /https?:\/\/(?:localhost|127\.0\.0\.1):\d+\//.test(
+    message,
+  );
+  const transientNetworkError = [
+    "ERR_CONNECTION_RESET",
+    "ERR_CONTENT_LENGTH_MISMATCH",
+    "ERR_EMPTY_RESPONSE",
+    "ERR_SOCKET",
+  ].some((fragment) => message.includes(fragment));
+
+  return browserLoadError && loopbackBundleUrl && transientNetworkError;
+}
+
+export async function startRemotionBundleServer(
+  options: StartRemotionBundleServerOptions,
+): Promise<PreparedRemotionBundleServer> {
+  const prepareServer = options.prepareServer ?? RenderInternals.prepareServer;
+  let port = options.port ?? getRemotionBundleServerPort(options.bundleDir);
+  const portRetries = Math.max(1, options.portRetries ?? 12);
+
+  for (let attempt = 0; attempt < portRetries; attempt++) {
+    try {
+      const server = await prepareServer({
+        webpackConfigOrServeUrl: options.bundleDir,
+        port,
+        remotionRoot:
+          options.remotionRoot ?? path.dirname(getRemotionEntryPoint()),
+        offthreadVideoThreads: 0,
+        logLevel: options.logLevel ?? "info",
+        indent: false,
+        offthreadVideoCacheSizeInBytes: null,
+        binariesDirectory: null,
+        forceIPv4: true,
+        sampleRate: options.sampleRate ?? 48000,
+      });
+
+      const serveUrl = normalizeRemotionServeUrl(server.serveUrl);
+      server.serveUrl = serveUrl;
+      const preparedServer: PreparedRemotionBundleServer = {
+        serveUrl,
+        close: async (force: boolean) => {
+          await server.closeServer(force);
+        },
+      };
+      if (isCompleteRemotionServer(server)) {
+        preparedServer.remotionServer = server;
+      }
+
+      return {
+        ...preparedServer,
+      };
+    } catch (error) {
+      if (
+        attempt >= portRetries - 1 ||
+        !isRemotionPortUnavailableError(error)
+      ) {
+        throw error;
+      }
+      port = nextRemotionBundleServerPort(port);
+    }
+  }
+
+  throw new Error("Unable to start Remotion bundle server.");
 }
 
 export async function renderProjectVideoOnly(
   options: RenderProjectVideoOnlyOptions,
 ): Promise<void> {
   const bundleRemotion = options.bundleRemotion ?? bundle;
-  const startBundleServer =
-    options.startBundleServer ?? startRemotionBundleServer;
+  const shouldUseTestServer =
+    !options.startBundleServer &&
+    Boolean(options.selectCompositionFn) &&
+    Boolean(options.renderMediaFn);
   const selectCompositionFn = options.selectCompositionFn ?? selectComposition;
   const renderMediaFn = options.renderMediaFn ?? renderMedia;
+  const renderWithPreparedServer =
+    options.renderWithPreparedServer ??
+    (async ({ server, renderOptions, inputProps }) => {
+      if (options.renderMediaFn) return renderMediaFn(renderOptions);
+      return renderMediaWithPreparedServer({
+        server,
+        renderOptions,
+        inputProps,
+      });
+    });
+  const remotionRenderMaxAttempts = Math.max(
+    1,
+    options.remotionRenderMaxAttempts ?? 3,
+  );
+  const remotionCleanupSettleMs =
+    options.remotionCleanupSettleMs ??
+    (options.selectCompositionFn && options.renderMediaFn ? 0 : 1500);
+  const wait = options.wait ?? sleep;
+  const waitForRemotionCleanup = () => wait(remotionCleanupSettleMs);
   const bundleDir = path.join(options.tempDir, "remotion-bundle");
   const renderProject = prepareProjectForRemotionRender(options.project);
   const frameImageFormat =
@@ -235,21 +604,50 @@ export async function renderProjectVideoOnly(
       publicDir: path.join(options.workspaceDir, "assets"),
     }),
   );
-  const server = await startBundleServer({
-    bundleDir: bundledServeUrl,
-    sampleRate: options.project.exportConfig.audioSampleRate,
-  });
+  const startBundleServer: NonNullable<
+    RenderProjectVideoOnlyOptions["startBundleServer"]
+  > =
+    options.startBundleServer ??
+    (shouldUseTestServer
+      ? async (): Promise<{
+          serveUrl: string;
+          close: (force: boolean) => Promise<void>;
+        }> => ({
+          serveUrl: bundledServeUrl,
+          close: async () => undefined,
+        })
+      : startRemotionBundleServer);
+  for (let attempt = 0; attempt < remotionRenderMaxAttempts; attempt++) {
+    const server = await startBundleServer({
+      bundleDir: bundledServeUrl,
+      port: getRemotionBundleServerPort(bundleDir) + attempt,
+      sampleRate: options.project.exportConfig.audioSampleRate,
+    });
 
-  try {
-    const composition = await timeAsyncStep("Remotion select composition", () =>
-      selectCompositionFn({
-        serveUrl: server.serveUrl,
-        id: "PlaylistVideo",
-        inputProps: { project: renderProject },
-      }),
-    );
-    await timeAsyncStep("Remotion render video", () =>
-      renderMediaFn({
+    try {
+      const composition = await timeAsyncStep(
+        "Remotion select composition",
+        () => {
+          const inputProps = { project: renderProject };
+          if (options.selectCompositionFn) {
+            return selectCompositionFn({
+              serveUrl: server.serveUrl,
+              id: "PlaylistVideo",
+              inputProps,
+            });
+          }
+
+          return selectCompositionWithPreparedServer({
+            server: server.remotionServer,
+            serveUrl: server.serveUrl,
+            id: "PlaylistVideo",
+            inputProps,
+            chromiumOptions: remotionChromiumOptions,
+          });
+        },
+      );
+      await waitForRemotionCleanup();
+      const renderOptions: RenderMediaOptions = {
         composition,
         serveUrl: server.serveUrl,
         codec: options.project.exportConfig.videoCodec,
@@ -284,10 +682,28 @@ export async function renderProjectVideoOnly(
           );
           if (progress >= 1) process.stdout.write("\n");
         },
-      }),
-    );
-  } finally {
-    await server.close(false);
+      };
+      await timeAsyncStep("Remotion render video", () =>
+        renderWithPreparedServer({
+          server: server.remotionServer,
+          renderOptions,
+          inputProps: { project: renderProject },
+        }),
+      );
+      await waitForRemotionCleanup();
+      return;
+    } catch (error) {
+      const shouldRetry =
+        attempt < remotionRenderMaxAttempts - 1 &&
+        isRetriableRemotionBrowserError(error);
+      if (!shouldRetry) throw error;
+      await waitForRemotionCleanup();
+      console.info(
+        `[Remotion] Recovered transient browser navigation issue; retrying render (${attempt + 2}/${remotionRenderMaxAttempts}).`,
+      );
+    } finally {
+      await server.close(false);
+    }
   }
 }
 
@@ -504,21 +920,25 @@ function getRemotionBinaryFileName(commandName: "ffmpeg" | "ffprobe"): string {
 }
 
 export function buildAudioFfmpegArgs(
-  concatListPath: string,
+  filePaths: string[],
   concatAudioPath: string,
   exportConfig: ExportConfig,
 ): string[] {
+  if (filePaths.length === 0) {
+    throw new Error("Cannot export audio for an empty playlist.");
+  }
+
+  const inputArgs = filePaths.flatMap((filePath) => ["-i", filePath]);
+  const audioInputs = filePaths.map((_, index) => `[${index}:a:0]`).join("");
+
   return [
     "-y",
     "-stats",
-    "-f",
-    "concat",
-    "-safe",
-    "0",
-    "-i",
-    concatListPath,
+    ...inputArgs,
+    "-filter_complex",
+    `${audioInputs}concat=n=${filePaths.length}:v=0:a=1,volume=${exportConfig.audioVolumePercent / 100}[aout]`,
     "-map",
-    "0:a:0",
+    "[aout]",
     "-vn",
     "-c:a",
     exportConfig.audioCodec,
@@ -528,8 +948,6 @@ export function buildAudioFfmpegArgs(
     String(exportConfig.audioSampleRate),
     "-ac",
     String(exportConfig.audioChannels),
-    "-filter:a",
-    `volume=${exportConfig.audioVolumePercent / 100}`,
     concatAudioPath,
   ];
 }
@@ -818,7 +1236,6 @@ export async function exportProject(options: {
   await fs.mkdir(tempDir, { recursive: true });
 
   const tracks = [...options.project.tracks].sort((a, b) => a.order - b.order);
-  const concatListPath = path.join(tempDir, "audio-list.txt");
   const concatAudioPath = path.join(tempDir, "audio.m4a");
   const videoOnlyPath = path.join(tempDir, "video.mp4");
   const outputPath = getOutputPath(
@@ -832,20 +1249,17 @@ export async function exportProject(options: {
       execa("ffmpeg", args, getVisibleFfmpegOptions()).then(() => undefined));
   const renderVideoOnly = options.renderVideoOnly ?? renderProjectVideoOnly;
   const finalFfmpegExport = options.finalFfmpegExport ?? runFinalFfmpegExport;
+  let exportCompleted = false;
+  let exportError: unknown;
 
   try {
-    await fs.writeFile(
-      concatListPath,
-      buildFfmpegConcatList(tracks.map((track) => track.sourcePath)),
-      "utf8",
-    );
     console.info(
-      "[FFmpeg] Concatenating playlist audio. FFmpeg progress is shown below.",
+      "[FFmpeg] Decoding and concatenating playlist audio. FFmpeg progress is shown below.",
     );
     await timeAsyncStep("FFmpeg audio concat/transcode", () =>
       runFfmpeg(
         buildAudioFfmpegArgs(
-          concatListPath,
+          tracks.map((track) => track.sourcePath),
           concatAudioPath,
           options.project.exportConfig,
         ),
@@ -873,11 +1287,15 @@ export async function exportProject(options: {
       }),
     );
     options.onProgress?.(1);
+    exportCompleted = true;
     return { outputPath };
+  } catch (error) {
+    exportError = error;
+    throw error;
   } finally {
     if (!options.keepTempFiles) {
       await timeAsyncStep("Temp cleanup", () =>
-        fs.rm(tempDir, { recursive: true, force: true }),
+        cleanupTempDir(tempDir, { exportCompleted, exportError }),
       );
     }
   }

@@ -1,3 +1,24 @@
+## [0.1.15] - 2026-06-17
+
+### Fixes
+
+- Expanded Remotion export retry handling for transient localhost bundle-load failures such as `ERR_CONNECTION_RESET`, `ERR_CONTENT_LENGTH_MISMATCH`, `ERR_EMPTY_RESPONSE`, and `ERR_SOCKET`.
+- Increased the Remotion video render retry budget from one retry to up to three attempts while retaining cleanup settle waits between attempts.
+- Restored the explicit stable Remotion bundle server lifecycle while keeping render concurrency and parallel encoding enabled.
+- Kept Chromium ANGLE GL rendering enabled by default and stabilized long real-playlist exports without disabling render concurrency.
+
+### Design Rationale
+
+- Real export logs showed Remotion can report bundle server races as browser resource-load failures instead of only `Visited ... but got no response`, so retry classification now covers the observed localhost failure family without retrying unrelated render errors.
+- A small bounded retry budget handles sequential select/render server lifecycle races while still failing quickly on persistent or non-transient problems.
+- Hyperflip#1 two-minute export windows showed localhost bundle serving races and transient Chromium load failures. The fix targets Remotion server lifecycle, deterministic high ports, prepared-server reuse, and bounded retries while preserving the faster ANGLE GL path.
+
+### Notes & Caveats
+
+- Retry matching is limited to browser load/resource errors on loopback Remotion URLs and known transient network fragments, avoiding broad retries of composition or template bugs.
+- This builds on the mixed-audio concat and Windows temp cleanup hardening already in the current export fix branch.
+- Chromium ANGLE GL remains the default export path for performance. Users can explicitly disable it with `PLAYLIST2VIDEO_REMOTION_GPU=0` or select another backend with `PLAYLIST2VIDEO_REMOTION_GL` if a machine-specific driver issue requires it.
+
 ## [0.1.14] - 2026-06-17
 
 ### Features
